@@ -546,17 +546,23 @@ html, body {
   top: calc(env(safe-area-inset-top) + 12px);
   left: 16px;
   right: 16px;
-  z-index: 100;
+  z-index: 200;
   padding: 14px 16px;
   border-radius: 12px;
   font-size: 15px;
   color: #fff;
+  opacity: 0;
+  pointer-events: none;
   transform: translateY(-120%);
-  transition: transform 0.3s ease;
+  transition: transform 0.25s ease, opacity 0.25s ease;
   box-shadow: 0 4px 16px rgba(0,0,0,0.15);
 }
 
-.toast.show { transform: translateY(0); }
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
 .toast.success { background: var(--ios-green); }
 .toast.error { background: var(--ios-red); }
 

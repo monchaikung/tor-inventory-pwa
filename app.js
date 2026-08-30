@@ -193,11 +193,10 @@ async function apiCall(payload, retries = 2) {
 let photoStatusTimer = null;
 
 const PHOTO_STATUS_STEPS = [
-  'Preparing photo… 準備照片',
+  'Compressing photo… 壓縮照片',
   'Uploading to server… 上載中',
   'Checking with Gemini… 正在分析',
   'Waiting for AI reply… 等候回覆',
-  'Reading suggestions… 讀取建議',
   'Almost done… 快完成'
 ];
 
@@ -213,7 +212,7 @@ function startPhotoStatus() {
   photoStatusTimer = setInterval(() => {
     i = Math.min(i + 1, PHOTO_STATUS_STEPS.length - 1);
     setPhotoStatus(PHOTO_STATUS_STEPS[i]);
-  }, 2200);
+  }, 1500);
 }
 
 function stopPhotoStatus() {
@@ -237,31 +236,57 @@ function hidePhotoLoading() {
 function handlePhotoCapture(e) { processImageFile(e.target.files[0]); e.target.value = ''; }
 function handlePhotoImport(e) { processImageFile(e.target.files[0]); e.target.value = ''; }
 
-function processImageFile(file) {
+function compressImageFile(file, maxDim = 1280, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read photo.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w >= h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('Could not process photo.'));
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function processImageFile(file) {
   if (!file) return;
-  if (file.size > 10 * 1024 * 1024) { showToast('Image too large. Max 10 MB.', 'error'); return; }
+  if (file.size > 15 * 1024 * 1024) { showToast('Image too large. Max 15 MB.', 'error'); return; }
   showPhotoLoading('Reading photo… 讀取照片');
   $('photoPreviewWrap').classList.remove('hidden');
-  const reader = new FileReader();
-  reader.onload = async (ev) => {
-    currentImageBase64 = ev.target.result.split(',')[1];
-    $('photoPreview').src = ev.target.result;
+  try {
+    setPhotoStatus('Compressing photo… 壓縮照片');
+    const dataUrl = await compressImageFile(file);
+    currentImageBase64 = dataUrl.split(',')[1];
+    $('photoPreview').src = dataUrl;
     setPhotoStatus('Uploading to server… 上載中');
-    try {
-      await analyzeWithAI(currentImageBase64);
-      setPhotoStatus('Done! Filling form… 完成');
-      showToast('AI filled the form 已自動填寫', 'success');
-    } catch (err) {
-      showToast(err.message, 'error');
-    } finally {
-      hidePhotoLoading();
-    }
-  };
-  reader.onerror = () => {
+    await analyzeWithAI(currentImageBase64);
+    setPhotoStatus('Done! Filling form… 完成');
+    showToast('AI filled the form 已自動填寫', 'success');
+  } catch (err) {
+    showToast(err.message || 'Photo failed.', 'error');
+  } finally {
     hidePhotoLoading();
-    showToast('Could not read photo.', 'error');
-  };
-  reader.readAsDataURL(file);
+  }
 }
 
 function clearPhoto() {
@@ -622,8 +647,15 @@ function switchTab(tab) {
 }
 
 function showToast(msg, type='success') {
-  const t = $('toast'); t.textContent = msg; t.className = `toast ${type} show`;
-  setTimeout(() => t.classList.remove('show'), 3000);
+  const t = $('toast');
+  if (!t) return;
+  if (showToast._timer) clearTimeout(showToast._timer);
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  showToast._timer = setTimeout(() => {
+    t.classList.remove('show');
+    showToast._timer = null;
+  }, 2500);
 }
 
 function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = String(str); return d.innerHTML; }

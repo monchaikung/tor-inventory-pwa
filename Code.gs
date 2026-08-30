@@ -7,7 +7,7 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.6-flash', version: 'v7' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v8' });
 }
 
 function doPost(e) {
@@ -71,12 +71,13 @@ function analyzeImage_(base64Image) {
     ]}],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 512,
       responseMimeType: 'application/json'
     }
   };
 
-  const models = ['gemini-3.6-flash', 'gemini-3.5-flash-lite'];
+  // Prefer faster lite model first; fall back to 3.6 if busy/unavailable
+  const models = ['gemini-3.5-flash-lite', 'gemini-3.6-flash'];
   let resp = null;
   let lastError = '';
 
