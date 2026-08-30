@@ -56,7 +56,7 @@ function analyzeImage_(base64Image) {
 
   const prompt = 'Analyze this photo for UK Transfer of Residence inventory. Return ONLY valid JSON (no markdown): {"transportMode":"shipped or handcarry","location":"box number or one of: 隨身背囊, 上機行李箱 (20吋), 上機大行李箱","roomCategory":"客廳|睡房|廚房|浴室|書房|其他","itemDescription":"ToR1 English description e.g. Used clothing","quantity":1,"size":"","weight":"","estimatedValue":0}. Small personal items->handcarry+隨身背囊. Large items->shipped.';
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey;
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey;
   const payload = {
     contents: [{ parts: [
       { text: prompt },
