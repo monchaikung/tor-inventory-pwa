@@ -143,17 +143,47 @@ function dismissInstallBanner() {
   $('installBanner')?.classList.add('hidden');
 }
 
-async function apiCall(payload) {
+async function apiCall(payload, retries = 2) {
   const idToken = getIdToken();
   if (!idToken) throw new Error('Not signed in');
-  const res = await fetch(GAS_API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ ...payload, idToken }) });
-  let data;
-  try { data = JSON.parse(await res.text()); } catch { throw new Error('Invalid server response. Check GAS deployment URL.'); }
-  if (!data.success) {
-    if (data.error?.includes('denied')) { $('loginError').textContent = 'Access denied.'; $('loginError').classList.remove('hidden'); signOut(); }
-    throw new Error(data.error || 'Request failed');
+
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(GAS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ ...payload, idToken }),
+        redirect: 'follow'
+      });
+      const raw = await res.text();
+      let data;
+      try { data = JSON.parse(raw); } catch {
+        throw new Error('Invalid server response. Check GAS deployment URL.');
+      }
+      if (!data.success) {
+        if (data.error?.includes('denied')) {
+          $('loginError').textContent = 'Access denied. Please sign in again.';
+          $('loginError').classList.remove('hidden');
+          signOut();
+        }
+        throw new Error(data.error || 'Request failed');
+      }
+      return data;
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err.message || err);
+      const network = /load failed|failed to fetch|networkerror|network request failed/i.test(msg);
+      if (!network || attempt === retries) break;
+      await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+    }
   }
-  return data;
+
+  const msg = String(lastErr?.message || lastErr || 'Request failed');
+  if (/load failed|failed to fetch|networkerror|network request failed/i.test(msg)) {
+    throw new Error('Network error. Check Wi-Fi and try again. 網路不穩，請再試。');
+  }
+  throw lastErr;
 }
 
 function handlePhotoCapture(e) { processImageFile(e.target.files[0]); e.target.value = ''; }
@@ -287,8 +317,11 @@ async function loadAllItems() {
     localStorage.setItem('torItems', JSON.stringify(allItems));
   } catch (err) {
     const cached = localStorage.getItem('torItems');
-    if (cached) allItems = JSON.parse(cached);
-    showToast(err.message, 'error');
+    if (cached) {
+      try { allItems = JSON.parse(cached); } catch { allItems = []; }
+    }
+    // Soft fail: inventory list failed, but logging still works
+    showToast(err.message || 'Could not load inventory.', 'error');
   }
   renderFilteredList();
   renderBoxSummary();
