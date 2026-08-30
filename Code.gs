@@ -65,14 +65,36 @@ function analyzeImage_(base64Image) {
     generationConfig: { temperature: 0.2, maxOutputTokens: 512 }
   };
 
-  const resp = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  });
+  const models = ['gemini-3.6-flash', 'gemini-3.5-flash-lite'];
+  let resp = null;
+  let lastError = '';
 
-  if (resp.getResponseCode() !== 200) throw new Error('Gemini API error: ' + resp.getContentText());
+  for (let m = 0; m < models.length; m++) {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[m] + ':generateContent?key=' + apiKey;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      resp = UrlFetchApp.fetch(url, {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      });
+      const code = resp.getResponseCode();
+      if (code === 200) break;
+
+      lastError = resp.getContentText();
+      const retryable = code === 503 || code === 429 || code === 500;
+      if (!retryable || attempt === 3) break;
+      Utilities.sleep(1000 * attempt);
+    }
+    if (resp.getResponseCode() === 200) break;
+  }
+
+  if (resp.getResponseCode() !== 200) {
+    if (resp.getResponseCode() === 503) {
+      throw new Error('AI is busy right now. Please wait a few seconds and try again.');
+    }
+    throw new Error('Gemini API error: ' + lastError);
+  }
 
   const result = JSON.parse(resp.getContentText());
   const text = result.candidates[0].content.parts[0].text;
