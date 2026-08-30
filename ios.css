@@ -275,9 +275,77 @@ html, body {
 .item-card {
   background: var(--ios-card);
   border-radius: 12px;
-  margin: 0 16px 10px;
-  overflow: hidden;
   cursor: pointer;
+}
+
+.item-swipe-wrap {
+  position: relative;
+  margin: 0 16px 10px;
+  border-radius: 12px;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.item-swipe-behind {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.item-swipe-behind-left {
+  justify-content: flex-start;
+  background: #007AFF;
+}
+
+.item-swipe-behind-right {
+  justify-content: flex-end;
+  background: #34C759;
+}
+
+.swipe-btn {
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0 18px;
+  min-width: 72px;
+  cursor: pointer;
+}
+
+.swipe-btn.destructive {
+  background: #FF3B30;
+}
+
+.item-swipe-content {
+  position: relative;
+  z-index: 1;
+  background: var(--ios-card);
+  border-radius: 12px;
+  will-change: transform;
+}
+
+.swipe-hint {
+  margin: 0 16px 8px;
+  font-size: 12px;
+  color: var(--ios-label-secondary);
+  text-align: center;
+}
+
+.item-thumb-wrap {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.item-thumb-emoji {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: var(--ios-gray-5);
 }
 
 .item-card:active {

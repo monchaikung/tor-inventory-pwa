@@ -302,10 +302,27 @@ function clearPhoto() {
 }
 
 async function analyzeWithAI(base64Image) {
+  const cacheKey = 'torAnalyze_' + hashBase64Sample(base64Image);
+  const cached = sessionStorage.getItem(cacheKey);
+  if (cached) {
+    setPhotoStatus('Using cached result 使用快取');
+    fillFormFromAI(JSON.parse(cached));
+    return;
+  }
+
   setPhotoStatus('Checking with Gemini… 正在分析');
   const data = await apiCall({ action: 'analyze', image: base64Image });
   setPhotoStatus('Waiting for return… 處理回覆');
-  fillFormFromAI(data.suggestions || data);
+  const suggestions = data.suggestions || data;
+  sessionStorage.setItem(cacheKey, JSON.stringify(suggestions));
+  fillFormFromAI(suggestions);
+}
+
+function hashBase64Sample(b64) {
+  const sample = b64.slice(0, 1500) + b64.length + b64.slice(-1500);
+  let h = 0;
+  for (let i = 0; i < sample.length; i++) h = ((h << 5) - h + sample.charCodeAt(i)) | 0;
+  return String(h);
 }
 
 function fillFormFromAI(data) {
@@ -401,8 +418,8 @@ async function saveItem() {
     await apiCall(payload);
     showToast(editingTimestamp ? 'Item updated! 已更新' : 'Item saved!', 'success');
     clearForm();
-    await loadAllItems();
     switchTab('items');
+    loadAllItems();
   } catch (err) { showToast(err.message, 'error'); }
   finally {
     $('saveBtn').disabled = false;
@@ -534,13 +551,153 @@ function clearSearch() {
   renderFilteredList();
 }
 
+function getItemTypeEmoji(item) {
+  const text = [item.itemDescription, item.roomCategory, item.size].filter(Boolean).join(' ').toLowerCase();
+  const rules = [
+    [/kitchen|cook|pot|pan|plate|bowl|utensil|microwave|kettle|ware|廚|鍋|碗|碟|杯|刀|廚具/, '🍳'],
+    [/cloth|shirt|dress|jacket|coat|sock|underwear|scarf|衣|服|褲|鞋|衫/, '👕'],
+    [/book|novel|magazine|textbook|書|本/, '📚'],
+    [/laptop|computer|phone|tablet|keyboard|mouse|charger|cable|monitor|電|腦|機|鍵盤/, '💻'],
+    [/chair|table|desk|sofa|bed|furniture|cabinet|傢|椅|桌|床|櫃/, '🪑'],
+    [/toy|game|puzzle|doll|玩具/, '🧸'],
+    [/tool|drill|hammer|screwdriver|工具/, '🔧'],
+    [/cosmetic|makeup|skincare|perfume|化妝|護膚/, '💄'],
+    [/sport|gym|ball|racket|bike|運動/, '⚽'],
+    [/jewel|watch|ring|necklace|手錶|飾/, '⌚'],
+    [/pillow|blanket|duvet|bedding|枕|被|床單/, '🛏️'],
+    [/towel|soap|shampoo|toothbrush|浴|毛巾|牙刷/, '🧴'],
+    [/food|snack|tea|coffee|plate|食|茶|咖啡/, '🍽️'],
+    [/bag|suitcase|luggage|backpack|箱|袋|背囊/, '🧳'],
+    [/art|paint|frame|picture|畫|相框/, '🖼️'],
+    [/music|guitar|piano|speaker|headphone|音|耳機/, '🎸'],
+    [/clean|vacuum|detergent|mop|清|掃/, '🧹'],
+    [/lamp|light|bulb|燈/, '💡'],
+    [/plant|flower|vase|花|植物/, '🪴']
+  ];
+  for (const [re, emoji] of rules) {
+    if (re.test(text)) return emoji;
+  }
+  const room = String(item.roomCategory || '');
+  if (/廚/.test(room)) return '🍳';
+  if (/睡/.test(room)) return '🛏️';
+  if (/客/.test(room)) return '🛋️';
+  if (/浴/.test(room)) return '🧴';
+  if (/書/.test(room)) return '📚';
+  return item.transportMode === '手提' ? '🎒' : '📦';
+}
+
+function renderItemThumb(item) {
+  const emoji = getItemTypeEmoji(item);
+  if (item.photoLink) {
+    const link = esc(item.photoLink);
+    return `<div class="item-thumb-wrap"><img class="item-thumb" src="${link}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="item-thumb item-thumb-emoji" style="display:none" aria-hidden="true">${emoji}</div></div>`;
+  }
+  return `<div class="item-thumb item-thumb-emoji" aria-hidden="true">${emoji}</div>`;
+}
+
+let openSwipeRow = null;
+
+function closeOpenSwipe() {
+  if (openSwipeRow) {
+    openSwipeRow.querySelector('.item-swipe-content').style.transform = '';
+    openSwipeRow.classList.remove('swipe-open-left', 'swipe-open-right');
+    openSwipeRow = null;
+  }
+}
+
+function bindItemSwipe(wrap) {
+  const content = wrap.querySelector('.item-swipe-content');
+  const ts = wrap.dataset.timestamp;
+  let startX = 0;
+  let startY = 0;
+  let currentX = 0;
+  let tracking = false;
+  let axis = null;
+  const maxReveal = 120;
+
+  wrap.querySelector('[data-swipe="edit"]')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const item = allItems.find((i) => i.timestamp === ts);
+    if (item) { closeOpenSwipe(); startEditItem(item); }
+  });
+  wrap.querySelector('[data-swipe="delete"]')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const item = allItems.find((i) => i.timestamp === ts);
+    if (item) { closeOpenSwipe(); confirmDeleteItem(item); }
+  });
+  wrap.querySelector('[data-swipe="status"]')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const item = allItems.find((i) => i.timestamp === ts);
+    if (item) { closeOpenSwipe(); cycleStatus(item); }
+  });
+
+  content.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    currentX = 0;
+    tracking = true;
+    axis = null;
+    content.style.transition = 'none';
+    if (openSwipeRow && openSwipeRow !== wrap) closeOpenSwipe();
+  }, { passive: true });
+
+  content.addEventListener('touchmove', (e) => {
+    if (!tracking) return;
+    const dx = e.touches[0].clientX - startX;
+    const dy = e.touches[0].clientY - startY;
+    if (!axis) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      if (axis === 'y') { tracking = false; return; }
+    }
+    if (axis !== 'x') return;
+    e.preventDefault();
+    currentX = Math.max(-maxReveal, Math.min(maxReveal, dx));
+    content.style.transform = `translateX(${currentX}px)`;
+  }, { passive: false });
+
+  content.addEventListener('touchend', () => {
+    if (!tracking || axis !== 'x') { tracking = false; return; }
+    tracking = false;
+    content.style.transition = 'transform 0.2s ease';
+    if (currentX <= -50) {
+      content.style.transform = `translateX(-${maxReveal}px)`;
+      wrap.classList.add('swipe-open-left');
+      wrap.classList.remove('swipe-open-right');
+      openSwipeRow = wrap;
+    } else if (currentX >= 50) {
+      content.style.transform = `translateX(${maxReveal}px)`;
+      wrap.classList.add('swipe-open-right');
+      wrap.classList.remove('swipe-open-left');
+      openSwipeRow = wrap;
+    } else {
+      content.style.transform = '';
+      wrap.classList.remove('swipe-open-left', 'swipe-open-right');
+      if (openSwipeRow === wrap) openSwipeRow = null;
+    }
+  });
+
+  content.addEventListener('click', (e) => {
+    if (Math.abs(currentX) > 10) return;
+    if (e.target.closest('.status-badge')) return;
+    if (wrap.classList.contains('swipe-open-left') || wrap.classList.contains('swipe-open-right')) {
+      closeOpenSwipe();
+      return;
+    }
+    content.querySelector('.item-detail')?.classList.toggle('hidden');
+  });
+}
+
 function renderFilteredList() {
   const items = getFilteredItems();
   const total = allItems.length;
   if ($('resultCount')) $('resultCount').textContent = items.length === total ? `Showing ${total} items` : `Showing ${items.length} of ${total}`;
   const list = $('itemList');
   if (!items.length) { list.innerHTML = '<div class="empty-state">No items found.</div>'; return; }
+  openSwipeRow = null;
   list.innerHTML = items.map(renderItemCard).join('');
+  list.querySelectorAll('.item-swipe-wrap').forEach(bindItemSwipe);
   list.querySelectorAll('.status-badge').forEach((badge) => {
     badge.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -548,34 +705,15 @@ function renderFilteredList() {
       if (item) cycleStatus(item);
     });
   });
-  list.querySelectorAll('.item-card').forEach((card) => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.item-actions')) return;
-      card.querySelector('.item-detail')?.classList.toggle('hidden');
-    });
-  });
-  list.querySelectorAll('[data-action="edit"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const item = allItems.find((i) => i.timestamp === btn.dataset.timestamp);
-      if (item) startEditItem(item);
-    });
-  });
-  list.querySelectorAll('[data-action="delete"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const item = allItems.find((i) => i.timestamp === btn.dataset.timestamp);
-      if (item) confirmDeleteItem(item);
-    });
-  });
 }
 
 function renderItemCard(item) {
-  const icon = item.transportMode === '手提' ? '🎒' : '📦';
-  const thumb = item.photoLink ? `<img class="item-thumb" src="${item.photoLink}" alt="" loading="lazy">` : '<div class="item-thumb item-thumb-placeholder">📷</div>';
+  const transportIcon = item.transportMode === '手提' ? '🎒' : '📦';
+  const thumb = renderItemThumb(item);
   const sc = STATUS_CLASS[item.status] || 'status-to-sort';
   const ts = esc(item.timestamp);
-  return `<div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${icon} ${esc(item.location)} · ${esc(item.roomCategory||'')}</div></div><span class="status-badge ${sc}" data-timestamp="${ts}">${esc(item.status||'待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity||'1')}</p><p>尺寸: ${esc(item.size||'—')} · 重量: ${esc(item.weight||'—')}</p><p>£${esc(item.estimatedValue||'—')} · ${ts}</p>${item.photoLink?`<a href="${item.photoLink}" target="_blank" style="color:#007AFF">View Photo</a>`:''}<div class="item-actions"><button type="button" class="item-action-btn" data-action="edit" data-timestamp="${ts}">Edit 編輯</button><button type="button" class="item-action-btn destructive" data-action="delete" data-timestamp="${ts}">Delete 刪除</button></div></div></div>`;
+  const nextStatus = STATUS_OPTIONS[(STATUS_OPTIONS.findIndex((s) => s.value === item.status) + 1) % STATUS_OPTIONS.length];
+  return `<div class="item-swipe-wrap" data-timestamp="${ts}"><div class="item-swipe-behind item-swipe-behind-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="item-swipe-behind item-swipe-behind-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory||'')}</div></div><span class="status-badge ${sc}" data-timestamp="${ts}">${esc(item.status||'待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity||'1')}</p><p>尺寸: ${esc(item.size||'—')} · 重量: ${esc(item.weight||'—')}</p><p>£${esc(item.estimatedValue||'—')}</p>${item.photoLink?`<a href="${item.photoLink}" target="_blank" rel="noopener" style="color:#007AFF">View Photo</a>`:''}</div></div></div></div>`;
 }
 
 async function cycleStatus(item) {
@@ -633,6 +771,7 @@ function parseWeight(w) { const n = parseFloat(String(w||'').replace(/[^0-9.]/g,
 function fmtW(w) { return w>0?`${w.toFixed(1)}kg`:'—'; }
 
 function switchTab(tab) {
+  closeOpenSwipe();
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
   const titles = {

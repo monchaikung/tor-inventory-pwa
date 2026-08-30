@@ -7,7 +7,7 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v8' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v9' });
 }
 
 function doPost(e) {
@@ -83,7 +83,7 @@ function analyzeImage_(base64Image) {
 
   for (let m = 0; m < models.length; m++) {
     const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[m] + ':generateContent?key=' + apiKey;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       resp = UrlFetchApp.fetch(url, {
         method: 'post',
         contentType: 'application/json',
@@ -95,8 +95,8 @@ function analyzeImage_(base64Image) {
 
       lastError = resp.getContentText();
       const retryable = code === 503 || code === 429 || code === 500;
-      if (!retryable || attempt === 3) break;
-      Utilities.sleep(1000 * attempt);
+      if (!retryable || attempt === 2) break;
+      Utilities.sleep(500);
     }
     if (resp.getResponseCode() === 200) break;
   }
@@ -104,6 +104,9 @@ function analyzeImage_(base64Image) {
   if (resp.getResponseCode() !== 200) {
     if (resp.getResponseCode() === 503) {
       throw new Error('AI is busy right now. Please wait a few seconds and try again.');
+    }
+    if (resp.getResponseCode() === 429) {
+      throw new Error('AI rate limit reached. Wait 30 seconds and try again. AI 請求太密，請稍等再試。');
     }
     throw new Error('Gemini API error: ' + lastError);
   }
