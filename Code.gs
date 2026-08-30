@@ -7,7 +7,7 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.6-flash', version: 'v4' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.6-flash', version: 'v6' });
 }
 
 function doPost(e) {
@@ -21,6 +21,8 @@ function doPost(e) {
       case 'save': return jsonResponse(saveItem_(body));
       case 'search': return jsonResponse(searchItems_(body.query || ''));
       case 'update': return jsonResponse(updateStatus_(body.timestamp, body.status));
+      case 'edit': return jsonResponse(editItem_(body));
+      case 'delete': return jsonResponse(deleteItem_(body.timestamp));
       default: return jsonResponse({ success: false, error: 'Unknown action' });
     }
   } catch (err) {
@@ -176,6 +178,52 @@ function updateStatus_(timestamp, status) {
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(timestamp)) {
       sheet.getRange(i + 1, 10).setValue(status);
+      return { success: true };
+    }
+  }
+  throw new Error('Item not found');
+}
+
+function editItem_(body) {
+  if (!body.timestamp) throw new Error('Missing timestamp');
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  const data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(body.timestamp)) {
+      var photoLink = String(data[i][10] || '');
+      if (body.image) {
+        photoLink = savePhoto_(body.image, body.location, body.timestamp);
+      }
+      sheet.getRange(i + 1, 2, i + 1, 11).setValues([[
+        body.transportMode || String(data[i][1] || '寄箱'),
+        body.location || '',
+        body.roomCategory || '',
+        body.itemDescription || '',
+        body.quantity || '1',
+        body.size || '',
+        body.weight || '',
+        body.estimatedValue || '',
+        body.status || String(data[i][9] || '待整理'),
+        photoLink
+      ]]);
+      return { success: true, photoLink: photoLink, timestamp: body.timestamp };
+    }
+  }
+  throw new Error('Item not found');
+}
+
+function deleteItem_(timestamp) {
+  if (!timestamp) throw new Error('Missing timestamp');
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  const data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(timestamp)) {
+      try {
+        var link = String(data[i][10] || '');
+        var match = link.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (match) DriveApp.getFileById(match[1]).setTrashed(true);
+      } catch (e) {}
+      sheet.deleteRow(i + 1);
       return { success: true };
     }
   }

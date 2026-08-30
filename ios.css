@@ -336,6 +336,32 @@ html, body {
   line-height: 1.6;
 }
 
+.item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.item-action-btn {
+  flex: 1;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 15px;
+  font-weight: 500;
+  background: var(--ios-gray-5);
+  color: var(--ios-blue);
+  cursor: pointer;
+}
+
+.item-action-btn:active {
+  opacity: 0.75;
+}
+
+.item-action-btn.destructive {
+  color: var(--ios-red);
+}
+
 .status-badge {
   display: inline-block;
   padding: 4px 10px;

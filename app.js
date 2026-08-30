@@ -26,6 +26,8 @@ const STATUS_CLASS = {
 
 let allItems = [];
 let currentImageBase64 = null;
+let editingTimestamp = null;
+let editingPhotoLink = '';
 let transportMode = 'shipped';
 let selectedHandCarry = '';
 let selectedStatus = '待整理';
@@ -53,6 +55,7 @@ function bindEvents() {
   $('importInput').addEventListener('change', handlePhotoImport);
   $('changePhotoBtn').addEventListener('click', clearPhoto);
   $('saveBtn').addEventListener('click', saveItem);
+  $('cancelEditBtn')?.addEventListener('click', cancelEdit);
   $('searchInput').addEventListener('input', onSearchInput);
   $('searchClear').addEventListener('click', clearSearch);
   $('handCarryPickerBtn').addEventListener('click', openHandCarryPicker);
@@ -107,6 +110,7 @@ function getIdToken() {
 function signOut() {
   sessionStorage.removeItem('idToken');
   allItems = [];
+  cancelEdit();
   if (window.google?.accounts?.id) google.accounts.id.disableAutoSelect();
   showLoginScreen();
 }
@@ -210,6 +214,10 @@ function clearPhoto() {
   $('photoPreviewWrap').classList.add('hidden');
   $('cameraInput').value = '';
   $('importInput').value = '';
+  if (editingTimestamp && editingPhotoLink) {
+    $('photoPreview').src = editingPhotoLink;
+    $('photoPreviewWrap').classList.remove('hidden');
+  }
 }
 
 async function analyzeWithAI(base64Image) {
@@ -245,6 +253,7 @@ function setHandCarry(label) {
   selectedHandCarry = label;
   const opt = HAND_CARRY_OPTIONS.find((o) => o.label === label);
   if (opt) $('handCarryPickerBtn').textContent = `${opt.icon} ${opt.label} ›`;
+  else $('handCarryPickerBtn').textContent = `${label} ›`;
 }
 
 function openHandCarryPicker() {
@@ -263,7 +272,7 @@ function openActionSheet(options, callback) {
   container.innerHTML = '';
   options.forEach((opt) => {
     const btn = document.createElement('button');
-    btn.className = 'action-sheet-btn' + (opt.selected ? ' selected' : '');
+    btn.className = 'action-sheet-btn' + (opt.selected ? ' selected' : '') + (opt.destructive ? ' destructive' : '');
     btn.textContent = opt.label;
     btn.addEventListener('click', () => { callback(opt.value); closeActionSheet(); });
     container.appendChild(btn);
@@ -273,32 +282,96 @@ function openActionSheet(options, callback) {
 
 function closeActionSheet() { $('actionSheetOverlay').classList.remove('show'); }
 
+function updateSaveButtonLabel() {
+  if (!$('saveBtn')) return;
+  if ($('saveBtn').disabled) return;
+  $('saveBtn').textContent = editingTimestamp ? 'Update item 更新' : 'Save to Google Drive';
+  $('cancelEditBtn')?.classList.toggle('hidden', !editingTimestamp);
+}
+
 async function saveItem() {
   const transportLabel = transportMode === 'shipped' ? '寄箱' : '手提';
   const location = transportMode === 'shipped' ? $('boxNumber').value.trim() : selectedHandCarry;
   if (!location) { showToast(transportMode === 'shipped' ? 'Enter box number.' : 'Select hand-carry bag.', 'error'); return; }
   if (!$('itemDescription').value.trim()) { showToast('Enter item description.', 'error'); return; }
-  if (!currentImageBase64) { showToast('Take or import a photo first.', 'error'); return; }
+  if (!editingTimestamp && !currentImageBase64) { showToast('Take or import a photo first.', 'error'); return; }
+  if (editingTimestamp && !currentImageBase64 && !editingPhotoLink) { showToast('Take or import a photo first.', 'error'); return; }
+
   $('saveBtn').disabled = true;
-  $('saveBtn').textContent = 'Saving…';
+  $('saveBtn').textContent = editingTimestamp ? 'Updating…' : 'Saving…';
   try {
-    await apiCall({
-      action: 'save', transportMode: transportLabel, location,
+    const payload = {
+      action: editingTimestamp ? 'edit' : 'save',
+      transportMode: transportLabel,
+      location,
       roomCategory: $('roomCategory').value.trim(),
       itemDescription: $('itemDescription').value.trim(),
       quantity: $('quantity').value || '1',
-      size: $('size').value.trim(), weight: $('weight').value.trim(),
+      size: $('size').value.trim(),
+      weight: $('weight').value.trim(),
       estimatedValue: $('estimatedValue').value.trim(),
-      status: selectedStatus, image: currentImageBase64
-    });
-    showToast('Item saved!', 'success');
+      status: selectedStatus
+    };
+    if (editingTimestamp) payload.timestamp = editingTimestamp;
+    if (currentImageBase64) payload.image = currentImageBase64;
+
+    await apiCall(payload);
+    showToast(editingTimestamp ? 'Item updated! 已更新' : 'Item saved!', 'success');
     clearForm();
     await loadAllItems();
+    switchTab('items');
   } catch (err) { showToast(err.message, 'error'); }
-  finally { $('saveBtn').disabled = false; $('saveBtn').textContent = 'Save to Google Drive'; }
+  finally {
+    $('saveBtn').disabled = false;
+    updateSaveButtonLabel();
+  }
+}
+
+function startEditItem(item) {
+  editingTimestamp = item.timestamp;
+  editingPhotoLink = item.photoLink || '';
+  currentImageBase64 = null;
+
+  if (item.transportMode === '手提') {
+    setTransportMode('handcarry');
+    setHandCarry(item.location || '');
+  } else {
+    setTransportMode('shipped');
+    $('boxNumber').value = item.location || '';
+  }
+
+  $('roomCategory').value = item.roomCategory || '';
+  $('itemDescription').value = item.itemDescription || '';
+  $('quantity').value = item.quantity || '1';
+  $('size').value = item.size || '';
+  $('weight').value = item.weight || '';
+  $('estimatedValue').value = item.estimatedValue || '';
+  selectedStatus = item.status || '待整理';
+  $('statusPickerBtn').textContent = `${selectedStatus} ›`;
+
+  if (editingPhotoLink) {
+    $('photoPreview').src = editingPhotoLink;
+    $('photoPreviewWrap').classList.remove('hidden');
+  } else {
+    clearPhoto();
+  }
+
+  updateSaveButtonLabel();
+  switchTab('log');
+  $('navTitle').textContent = 'Edit Item 編輯';
+  window.scrollTo(0, 0);
+}
+
+function cancelEdit() {
+  editingTimestamp = null;
+  editingPhotoLink = '';
+  clearForm();
+  updateSaveButtonLabel();
 }
 
 function clearForm() {
+  editingTimestamp = null;
+  editingPhotoLink = '';
   $('boxNumber').value = '';
   selectedHandCarry = '';
   $('handCarryPickerBtn').textContent = 'Select bag ›';
@@ -307,7 +380,35 @@ function clearForm() {
   selectedStatus = '待整理';
   $('statusPickerBtn').textContent = '待整理 ›';
   setTransportMode('shipped');
-  clearPhoto();
+  currentImageBase64 = null;
+  $('photoPreview').src = '';
+  $('photoPreviewWrap').classList.add('hidden');
+  $('cameraInput').value = '';
+  $('importInput').value = '';
+  updateSaveButtonLabel();
+}
+
+function confirmDeleteItem(item) {
+  openActionSheet([
+    { label: `Delete「${(item.itemDescription || 'item').slice(0, 24)}」`, value: 'delete', destructive: true }
+  ], (v) => {
+    if (v === 'delete') deleteItem(item);
+  });
+}
+
+async function deleteItem(item) {
+  try {
+    await apiCall({ action: 'delete', timestamp: item.timestamp });
+    allItems = allItems.filter((i) => i.timestamp !== item.timestamp);
+    localStorage.setItem('torItems', JSON.stringify(allItems));
+    if (editingTimestamp === item.timestamp) cancelEdit();
+    renderFilteredList();
+    renderBoxSummary();
+    renderProgressBars();
+    showToast('Item deleted 已刪除', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 }
 
 async function loadAllItems() {
@@ -320,7 +421,6 @@ async function loadAllItems() {
     if (cached) {
       try { allItems = JSON.parse(cached); } catch { allItems = []; }
     }
-    // Soft fail: inventory list failed, but logging still works
     showToast(err.message || 'Could not load inventory.', 'error');
   }
   renderFilteredList();
@@ -366,7 +466,24 @@ function renderFilteredList() {
     });
   });
   list.querySelectorAll('.item-card').forEach((card) => {
-    card.addEventListener('click', () => card.querySelector('.item-detail')?.classList.toggle('hidden'));
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.item-actions')) return;
+      card.querySelector('.item-detail')?.classList.toggle('hidden');
+    });
+  });
+  list.querySelectorAll('[data-action="edit"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = allItems.find((i) => i.timestamp === btn.dataset.timestamp);
+      if (item) startEditItem(item);
+    });
+  });
+  list.querySelectorAll('[data-action="delete"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = allItems.find((i) => i.timestamp === btn.dataset.timestamp);
+      if (item) confirmDeleteItem(item);
+    });
   });
 }
 
@@ -374,7 +491,8 @@ function renderItemCard(item) {
   const icon = item.transportMode === '手提' ? '🎒' : '📦';
   const thumb = item.photoLink ? `<img class="item-thumb" src="${item.photoLink}" alt="" loading="lazy">` : '<div class="item-thumb item-thumb-placeholder">📷</div>';
   const sc = STATUS_CLASS[item.status] || 'status-to-sort';
-  return `<div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${icon} ${esc(item.location)} · ${esc(item.roomCategory||'')}</div></div><span class="status-badge ${sc}" data-timestamp="${esc(item.timestamp)}">${esc(item.status||'待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity||'1')}</p><p>尺寸: ${esc(item.size||'—')} · 重量: ${esc(item.weight||'—')}</p><p>£${esc(item.estimatedValue||'—')} · ${esc(item.timestamp||'')}</p>${item.photoLink?`<a href="${item.photoLink}" target="_blank" style="color:#007AFF">View Photo</a>`:''}</div></div>`;
+  const ts = esc(item.timestamp);
+  return `<div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${icon} ${esc(item.location)} · ${esc(item.roomCategory||'')}</div></div><span class="status-badge ${sc}" data-timestamp="${ts}">${esc(item.status||'待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity||'1')}</p><p>尺寸: ${esc(item.size||'—')} · 重量: ${esc(item.weight||'—')}</p><p>£${esc(item.estimatedValue||'—')} · ${ts}</p>${item.photoLink?`<a href="${item.photoLink}" target="_blank" style="color:#007AFF">View Photo</a>`:''}<div class="item-actions"><button type="button" class="item-action-btn" data-action="edit" data-timestamp="${ts}">Edit 編輯</button><button type="button" class="item-action-btn destructive" data-action="delete" data-timestamp="${ts}">Delete 刪除</button></div></div></div>`;
 }
 
 async function cycleStatus(item) {
@@ -434,7 +552,11 @@ function fmtW(w) { return w>0?`${w.toFixed(1)}kg`:'—'; }
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
-  const titles = { log: 'Log Item', items: 'Inventory', boxes: 'Boxes' };
+  const titles = {
+    log: editingTimestamp ? 'Edit Item 編輯' : 'Log Item',
+    items: 'Inventory',
+    boxes: 'Boxes'
+  };
   $('navTitle').textContent = titles[tab] || 'ToR Log';
   if (tab === 'log') $('screenLog').classList.add('active');
   if (tab === 'items') { $('screenItems').classList.add('active'); renderFilteredList(); }
