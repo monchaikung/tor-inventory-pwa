@@ -3,13 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="ToR Log">
   <meta name="theme-color" content="#007AFF">
   <title>ToR Log</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-192.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="ios.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -27,6 +28,14 @@
 
   <!-- Main App -->
   <div id="mainApp" class="hidden">
+    <div id="installBanner" class="install-banner hidden">
+      <div class="install-banner-content">
+        <strong>📲 Add to Home Screen</strong>
+        <p>Tap <span class="install-share">Share ⬆️</span> → <strong>Add to Home Screen</strong> → name it <strong>ToR Log</strong></p>
+        <p class="install-zh">點 <span class="install-share">分享</span> → <strong>加入主畫面</strong></p>
+      </div>
+      <button type="button" id="dismissInstallBanner" class="install-dismiss" aria-label="Dismiss">×</button>
+    </div>
     <div class="app-container">
 
       <!-- Nav Bar -->

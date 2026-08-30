@@ -580,3 +580,52 @@ html, body {
   color: var(--ios-label-secondary);
   margin: 0 16px 8px;
 }
+
+.install-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 16px 0;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #007AFF 0%, #0056CC 100%);
+  color: #fff;
+  border-radius: 14px;
+  box-shadow: 0 4px 16px rgba(0, 122, 255, 0.35);
+  position: relative;
+  z-index: 45;
+}
+
+.install-banner.hidden { display: none !important; }
+
+.install-banner-content { flex: 1; }
+
+.install-banner strong { font-size: 15px; }
+
+.install-banner p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.95;
+}
+
+.install-zh { margin-top: 4px !important; opacity: 0.85 !important; }
+
+.install-share {
+  background: rgba(255,255,255,0.25);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.install-dismiss {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.2);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}

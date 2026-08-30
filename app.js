@@ -36,7 +36,10 @@ let filterLocation = '';
 const $ = (id) => document.getElementById(id);
 
 document.addEventListener('DOMContentLoaded', () => {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
+  }
+
   if (sessionStorage.getItem('idToken')) { showMainApp(); loadAllItems(); } else showLoginScreen();
   initGoogleSignIn();
   bindEvents();
@@ -56,6 +59,7 @@ function bindEvents() {
   $('statusPickerBtn').addEventListener('click', openStatusPicker);
   $('actionSheetCancel').addEventListener('click', closeActionSheet);
   $('actionSheetOverlay').addEventListener('click', (e) => { if (e.target === $('actionSheetOverlay')) closeActionSheet(); });
+  $('dismissInstallBanner')?.addEventListener('click', dismissInstallBanner);
   $('modeShipped').addEventListener('click', () => setTransportMode('shipped'));
   $('modeHandCarry').addEventListener('click', () => setTransportMode('handcarry'));
   document.querySelectorAll('.tab-btn').forEach((btn) => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
@@ -108,7 +112,36 @@ function signOut() {
 }
 
 function showLoginScreen() { $('loginScreen').classList.remove('hidden'); $('mainApp').classList.add('hidden'); }
-function showMainApp() { $('loginScreen').classList.add('hidden'); $('mainApp').classList.remove('hidden'); }
+function showMainApp() {
+  $('loginScreen').classList.add('hidden');
+  $('mainApp').classList.remove('hidden');
+  showInstallBannerIfNeeded();
+}
+
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function showInstallBannerIfNeeded() {
+  const banner = $('installBanner');
+  if (!banner) return;
+  if (isStandalone() || localStorage.getItem('installBannerDismissed') === '1') {
+    banner.classList.add('hidden');
+    return;
+  }
+  if (isIOS() || /Android/i.test(navigator.userAgent)) {
+    banner.classList.remove('hidden');
+  }
+}
+
+function dismissInstallBanner() {
+  localStorage.setItem('installBannerDismissed', '1');
+  $('installBanner')?.classList.add('hidden');
+}
 
 async function apiCall(payload) {
   const idToken = getIdToken();
