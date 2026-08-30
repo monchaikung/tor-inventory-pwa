@@ -7,7 +7,7 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v9' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v10' });
 }
 
 function doPost(e) {
@@ -57,12 +57,15 @@ function analyzeImage_(base64Image) {
   if (!apiKey) throw new Error('GEMINI_API_KEY not set in Script Properties');
 
   const prompt =
-    'Analyze this photo for UK Transfer of Residence inventory. ' +
-    'Reply with ONE JSON object only. No markdown. No extra text. ' +
-    'Keys: transportMode (shipped|handcarry), location (box number OR one of: 隨身背囊, 上機行李箱 (20吋), 上機大行李箱), ' +
-    'roomCategory (客廳|睡房|廚房|浴室|書房|其他), itemDescription (short English ToR1 phrase), ' +
-    'quantity (number), size (string), weight (string), estimatedValue (number). ' +
-    'Small personal items -> handcarry + 隨身背囊. Large items -> shipped. Keep strings short.';
+    'You analyze a photo for UK Transfer of Residence inventory. ' +
+    'Return JSON with exactly these keys: ' +
+    'transportMode, location, roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
+    'transportMode must be "shipped" or "handcarry". ' +
+    'location: box number like "1" for shipped, OR one of "隨身背囊","上機行李箱 (20吋)","上機大行李箱" for handcarry. ' +
+    'roomCategory: one of 客廳,睡房,廚房,浴室,書房,其他. ' +
+    'itemDescription: short English phrase for customs e.g. "Used laptop computer". Always fill itemDescription. ' +
+    'quantity: number. size/weight: short strings or "". estimatedValue: number in GBP or 0. ' +
+    'Small personal items -> handcarry. Large/furniture/electronics home items -> shipped.';
 
   const payload = {
     contents: [{ parts: [
@@ -71,7 +74,7 @@ function analyzeImage_(base64Image) {
     ]}],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 512,
+      maxOutputTokens: 1024,
       responseMimeType: 'application/json'
     }
   };
@@ -116,7 +119,11 @@ function analyzeImage_(base64Image) {
   if (!text) throw new Error('AI returned an empty response. Please try again.');
 
   try {
-    return { success: true, suggestions: parseAiJson_(text) };
+    const suggestions = normalizeSuggestions_(parseAiJson_(text));
+    if (!suggestions.itemDescription) {
+      throw new Error('AI did not return item description');
+    }
+    return { success: true, suggestions: suggestions };
   } catch (err) {
     throw new Error('AI returned incomplete data. Please try the photo again.');
   }
@@ -124,9 +131,10 @@ function analyzeImage_(base64Image) {
 
 function extractGeminiText_(result) {
   try {
-    var parts = result.candidates[0].content.parts;
+    var parts = result.candidates[0].content.parts || [];
     var out = '';
     for (var i = 0; i < parts.length; i++) {
+      // Skip pure thought parts when possible; still take any text
       if (parts[i].text) out += parts[i].text;
     }
     return String(out || '').trim();
@@ -151,6 +159,36 @@ function parseAiJson_(text) {
     }
     throw e1;
   }
+}
+
+function normalizeSuggestions_(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  // Unwrap accidental nesting
+  if (raw.suggestions && typeof raw.suggestions === 'object') raw = raw.suggestions;
+
+  function pick() {
+    for (var i = 0; i < arguments.length; i++) {
+      var v = raw[arguments[i]];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+    }
+    return '';
+  }
+
+  var transport = String(pick('transportMode', 'transport_mode', '運送方式', 'mode')).toLowerCase();
+  if (transport.indexOf('hand') !== -1 || transport.indexOf('手提') !== -1) transport = 'handcarry';
+  else if (transport) transport = 'shipped';
+  else transport = 'shipped';
+
+  return {
+    transportMode: transport,
+    location: String(pick('location', 'boxNumber', 'box_number', '存放位置', '箱號')),
+    roomCategory: String(pick('roomCategory', 'room_category', '房間分類', 'room')),
+    itemDescription: String(pick('itemDescription', 'item_description', 'description', '物品描述', 'desc')),
+    quantity: pick('quantity', 'qty', '數量') || 1,
+    size: String(pick('size', '尺寸')),
+    weight: String(pick('weight', '重量')),
+    estimatedValue: pick('estimatedValue', 'estimated_value', 'value', '預估價值') || 0
+  };
 }
 
 function saveItem_(body) {

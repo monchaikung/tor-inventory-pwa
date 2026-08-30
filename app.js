@@ -279,9 +279,10 @@ async function processImageFile(file) {
     currentImageBase64 = dataUrl.split(',')[1];
     $('photoPreview').src = dataUrl;
     setPhotoStatus('Uploading to server… 上載中');
-    await analyzeWithAI(currentImageBase64);
+    const filled = await analyzeWithAI(currentImageBase64);
     setPhotoStatus('Done! Filling form… 完成');
-    showToast('AI filled the form 已自動填寫', 'success');
+    if (filled) showToast('AI filled the form 已自動填寫', 'success');
+    else showToast('AI returned no details. Please fill manually. 請手動填寫', 'error');
   } catch (err) {
     showToast(err.message || 'Photo failed.', 'error');
   } finally {
@@ -305,17 +306,27 @@ async function analyzeWithAI(base64Image) {
   const cacheKey = 'torAnalyze_' + hashBase64Sample(base64Image);
   const cached = sessionStorage.getItem(cacheKey);
   if (cached) {
-    setPhotoStatus('Using cached result 使用快取');
-    fillFormFromAI(JSON.parse(cached));
-    return;
+    try {
+      const parsed = JSON.parse(cached);
+      if (parsed && parsed.itemDescription) {
+        setPhotoStatus('Using cached result 使用快取');
+        return fillFormFromAI(parsed);
+      }
+    } catch (_) {}
+    sessionStorage.removeItem(cacheKey);
   }
 
   setPhotoStatus('Checking with Gemini… 正在分析');
   const data = await apiCall({ action: 'analyze', image: base64Image });
   setPhotoStatus('Waiting for return… 處理回覆');
-  const suggestions = data.suggestions || data;
-  sessionStorage.setItem(cacheKey, JSON.stringify(suggestions));
-  fillFormFromAI(suggestions);
+  let suggestions = data.suggestions || data;
+  if (typeof suggestions === 'string') {
+    try { suggestions = JSON.parse(suggestions); } catch (_) { suggestions = {}; }
+  }
+  if (suggestions && suggestions.suggestions) suggestions = suggestions.suggestions;
+  const filled = fillFormFromAI(suggestions);
+  if (filled) sessionStorage.setItem(cacheKey, JSON.stringify(suggestions));
+  return filled;
 }
 
 function hashBase64Sample(b64) {
@@ -325,20 +336,42 @@ function hashBase64Sample(b64) {
   return String(h);
 }
 
+function pickAiField(data, keys) {
+  for (const k of keys) {
+    const v = data?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+  }
+  return '';
+}
+
 function fillFormFromAI(data) {
-  if (data.transportMode === 'handcarry' || data.transportMode === '手提') {
+  if (!data || typeof data !== 'object') return false;
+
+  const transportRaw = String(pickAiField(data, ['transportMode', 'transport_mode', '運送方式', 'mode'])).toLowerCase();
+  const location = String(pickAiField(data, ['location', 'boxNumber', 'box_number', '存放位置', '箱號']));
+  const roomCategory = String(pickAiField(data, ['roomCategory', 'room_category', '房間分類', 'room']));
+  const itemDescription = String(pickAiField(data, ['itemDescription', 'item_description', 'description', '物品描述', 'desc']));
+  const quantity = pickAiField(data, ['quantity', 'qty', '數量']) || '1';
+  const size = String(pickAiField(data, ['size', '尺寸']));
+  const weight = String(pickAiField(data, ['weight', '重量']));
+  const estimatedValue = pickAiField(data, ['estimatedValue', 'estimated_value', 'value', '預估價值']);
+
+  if (transportRaw.includes('hand') || transportRaw.includes('手提')) {
     setTransportMode('handcarry');
-    if (data.location) setHandCarry(data.location);
+    if (location) setHandCarry(location);
   } else {
     setTransportMode('shipped');
-    if (data.location || data.boxNumber) $('boxNumber').value = data.location || data.boxNumber || '';
+    if (location) $('boxNumber').value = location;
   }
-  if (data.roomCategory) $('roomCategory').value = data.roomCategory;
-  if (data.itemDescription) $('itemDescription').value = data.itemDescription;
-  if (data.quantity) $('quantity').value = data.quantity;
-  if (data.size) $('size').value = data.size;
-  if (data.weight) $('weight').value = data.weight;
-  if (data.estimatedValue) $('estimatedValue').value = data.estimatedValue;
+
+  if (roomCategory) $('roomCategory').value = roomCategory;
+  if (itemDescription) $('itemDescription').value = itemDescription;
+  if (quantity) $('quantity').value = quantity;
+  if (size) $('size').value = size;
+  if (weight) $('weight').value = weight;
+  if (estimatedValue !== '') $('estimatedValue').value = estimatedValue;
+
+  return Boolean(itemDescription);
 }
 
 function setTransportMode(mode) {
