@@ -7,7 +7,7 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.6-flash', version: 'v6' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.6-flash', version: 'v7' });
 }
 
 function doPost(e) {
@@ -56,14 +56,24 @@ function analyzeImage_(base64Image) {
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) throw new Error('GEMINI_API_KEY not set in Script Properties');
 
-  const prompt = 'Analyze this photo for UK Transfer of Residence inventory. Return ONLY valid JSON (no markdown): {"transportMode":"shipped or handcarry","location":"box number or one of: 隨身背囊, 上機行李箱 (20吋), 上機大行李箱","roomCategory":"客廳|睡房|廚房|浴室|書房|其他","itemDescription":"ToR1 English description e.g. Used clothing","quantity":1,"size":"","weight":"","estimatedValue":0}. Small personal items->handcarry+隨身背囊. Large items->shipped.';
+  const prompt =
+    'Analyze this photo for UK Transfer of Residence inventory. ' +
+    'Reply with ONE JSON object only. No markdown. No extra text. ' +
+    'Keys: transportMode (shipped|handcarry), location (box number OR one of: 隨身背囊, 上機行李箱 (20吋), 上機大行李箱), ' +
+    'roomCategory (客廳|睡房|廚房|浴室|書房|其他), itemDescription (short English ToR1 phrase), ' +
+    'quantity (number), size (string), weight (string), estimatedValue (number). ' +
+    'Small personal items -> handcarry + 隨身背囊. Large items -> shipped. Keep strings short.';
 
   const payload = {
     contents: [{ parts: [
       { text: prompt },
       { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
     ]}],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 512 }
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 2048,
+      responseMimeType: 'application/json'
+    }
   };
 
   const models = ['gemini-3.6-flash', 'gemini-3.5-flash-lite'];
@@ -98,9 +108,45 @@ function analyzeImage_(base64Image) {
   }
 
   const result = JSON.parse(resp.getContentText());
-  const text = result.candidates[0].content.parts[0].text;
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  return { success: true, suggestions: JSON.parse(cleaned) };
+  const text = extractGeminiText_(result);
+  if (!text) throw new Error('AI returned an empty response. Please try again.');
+
+  try {
+    return { success: true, suggestions: parseAiJson_(text) };
+  } catch (err) {
+    throw new Error('AI returned incomplete data. Please try the photo again.');
+  }
+}
+
+function extractGeminiText_(result) {
+  try {
+    var parts = result.candidates[0].content.parts;
+    var out = '';
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].text) out += parts[i].text;
+    }
+    return String(out || '').trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+function parseAiJson_(text) {
+  var cleaned = String(text)
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (e1) {
+    var start = cleaned.indexOf('{');
+    var end = cleaned.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      return JSON.parse(cleaned.substring(start, end + 1));
+    }
+    throw e1;
+  }
 }
 
 function saveItem_(body) {
