@@ -416,17 +416,36 @@ html, body {
 .photo-loading {
   position: absolute;
   inset: 0;
-  background: rgba(255,255,255,0.7);
+  background: rgba(0,0,0,0.45);
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 16px;
+}
+
+.photo-loading-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 90%;
+}
+
+.photo-status-text {
+  margin: 0;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.35;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
 }
 
 .spinner {
   width: 32px;
   height: 32px;
-  border: 3px solid var(--ios-gray-5);
-  border-top-color: var(--ios-blue);
+  border: 3px solid rgba(255,255,255,0.35);
+  border-top-color: #fff;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }

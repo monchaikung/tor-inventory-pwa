@@ -190,20 +190,76 @@ async function apiCall(payload, retries = 2) {
   throw lastErr;
 }
 
+let photoStatusTimer = null;
+
+const PHOTO_STATUS_STEPS = [
+  'Preparing photo… 準備照片',
+  'Uploading to server… 上載中',
+  'Checking with Gemini… 正在分析',
+  'Waiting for AI reply… 等候回覆',
+  'Reading suggestions… 讀取建議',
+  'Almost done… 快完成'
+];
+
+function setPhotoStatus(msg) {
+  const el = $('photoStatusText');
+  if (el) el.textContent = msg;
+}
+
+function startPhotoStatus() {
+  stopPhotoStatus();
+  let i = 0;
+  setPhotoStatus(PHOTO_STATUS_STEPS[0]);
+  photoStatusTimer = setInterval(() => {
+    i = Math.min(i + 1, PHOTO_STATUS_STEPS.length - 1);
+    setPhotoStatus(PHOTO_STATUS_STEPS[i]);
+  }, 2200);
+}
+
+function stopPhotoStatus() {
+  if (photoStatusTimer) {
+    clearInterval(photoStatusTimer);
+    photoStatusTimer = null;
+  }
+}
+
+function showPhotoLoading(msg) {
+  startPhotoStatus();
+  if (msg) setPhotoStatus(msg);
+  $('photoLoading')?.classList.remove('hidden');
+}
+
+function hidePhotoLoading() {
+  stopPhotoStatus();
+  $('photoLoading')?.classList.add('hidden');
+}
+
 function handlePhotoCapture(e) { processImageFile(e.target.files[0]); e.target.value = ''; }
 function handlePhotoImport(e) { processImageFile(e.target.files[0]); e.target.value = ''; }
 
 function processImageFile(file) {
   if (!file) return;
   if (file.size > 10 * 1024 * 1024) { showToast('Image too large. Max 10 MB.', 'error'); return; }
+  showPhotoLoading('Reading photo… 讀取照片');
+  $('photoPreviewWrap').classList.remove('hidden');
   const reader = new FileReader();
   reader.onload = async (ev) => {
     currentImageBase64 = ev.target.result.split(',')[1];
     $('photoPreview').src = ev.target.result;
-    $('photoPreviewWrap').classList.remove('hidden');
-    $('photoLoading').classList.remove('hidden');
-    try { await analyzeWithAI(currentImageBase64); } catch (err) { showToast(err.message, 'error'); }
-    finally { $('photoLoading').classList.add('hidden'); }
+    setPhotoStatus('Uploading to server… 上載中');
+    try {
+      await analyzeWithAI(currentImageBase64);
+      setPhotoStatus('Done! Filling form… 完成');
+      showToast('AI filled the form 已自動填寫', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      hidePhotoLoading();
+    }
+  };
+  reader.onerror = () => {
+    hidePhotoLoading();
+    showToast('Could not read photo.', 'error');
   };
   reader.readAsDataURL(file);
 }
@@ -221,7 +277,9 @@ function clearPhoto() {
 }
 
 async function analyzeWithAI(base64Image) {
+  setPhotoStatus('Checking with Gemini… 正在分析');
   const data = await apiCall({ action: 'analyze', image: base64Image });
+  setPhotoStatus('Waiting for return… 處理回覆');
   fillFormFromAI(data.suggestions || data);
 }
 

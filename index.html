@@ -57,7 +57,12 @@
 
         <div id="photoPreviewWrap" class="photo-preview-wrap hidden">
           <img id="photoPreview" class="photo-preview" alt="Preview">
-          <div id="photoLoading" class="photo-loading hidden"><div class="spinner"></div></div>
+          <div id="photoLoading" class="photo-loading hidden">
+            <div class="photo-loading-inner">
+              <div class="spinner"></div>
+              <p id="photoStatusText" class="photo-status-text">Preparing photo…</p>
+            </div>
+          </div>
           <button class="change-photo-btn" id="changePhotoBtn">Change photo</button>
         </div>
 
