@@ -291,17 +291,18 @@ html, body {
   inset: 0;
   display: flex;
   align-items: stretch;
+  justify-content: space-between;
 }
 
-.item-swipe-behind-left {
-  justify-content: flex-start;
-  background: #007AFF;
+.swipe-actions-left,
+.swipe-actions-right {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
 }
 
-.item-swipe-behind-right {
-  justify-content: flex-end;
-  background: #34C759;
-}
+.swipe-actions-left { background: #007AFF; }
+.swipe-actions-right { background: #34C759; }
 
 .swipe-btn {
   border: none;
@@ -309,8 +310,8 @@ html, body {
   color: #fff;
   font-size: 14px;
   font-weight: 600;
-  padding: 0 18px;
-  min-width: 72px;
+  padding: 0 16px;
+  min-width: 68px;
   cursor: pointer;
 }
 

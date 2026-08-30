@@ -633,7 +633,7 @@ let openSwipeRow = null;
 function closeOpenSwipe() {
   if (openSwipeRow) {
     openSwipeRow.querySelector('.item-swipe-content').style.transform = '';
-    openSwipeRow.classList.remove('swipe-open-left', 'swipe-open-right');
+    openSwipeRow.classList.remove('swipe-open-status', 'swipe-open-actions', 'swipe-open-left', 'swipe-open-right');
     openSwipeRow = null;
   }
 }
@@ -646,7 +646,8 @@ function bindItemSwipe(wrap) {
   let currentX = 0;
   let tracking = false;
   let axis = null;
-  const maxReveal = 120;
+  const maxLeft = 136;  // reveal Edit + Delete (swipe right)
+  const maxRight = 110; // reveal Status (swipe left)
 
   wrap.querySelector('[data-swipe="edit"]')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -686,7 +687,7 @@ function bindItemSwipe(wrap) {
     }
     if (axis !== 'x') return;
     e.preventDefault();
-    currentX = Math.max(-maxReveal, Math.min(maxReveal, dx));
+    currentX = Math.max(-maxRight, Math.min(maxLeft, dx));
     content.style.transform = `translateX(${currentX}px)`;
   }, { passive: false });
 
@@ -694,19 +695,21 @@ function bindItemSwipe(wrap) {
     if (!tracking || axis !== 'x') { tracking = false; return; }
     tracking = false;
     content.style.transition = 'transform 0.2s ease';
-    if (currentX <= -50) {
-      content.style.transform = `translateX(-${maxReveal}px)`;
-      wrap.classList.add('swipe-open-left');
-      wrap.classList.remove('swipe-open-right');
+    // Finger moves left → content left → show Status on the right
+    if (currentX <= -48) {
+      content.style.transform = `translateX(-${maxRight}px)`;
+      wrap.classList.add('swipe-open-status');
+      wrap.classList.remove('swipe-open-actions');
       openSwipeRow = wrap;
-    } else if (currentX >= 50) {
-      content.style.transform = `translateX(${maxReveal}px)`;
-      wrap.classList.add('swipe-open-right');
-      wrap.classList.remove('swipe-open-left');
+    // Finger moves right → content right → show Edit/Delete on the left
+    } else if (currentX >= 48) {
+      content.style.transform = `translateX(${maxLeft}px)`;
+      wrap.classList.add('swipe-open-actions');
+      wrap.classList.remove('swipe-open-status');
       openSwipeRow = wrap;
     } else {
       content.style.transform = '';
-      wrap.classList.remove('swipe-open-left', 'swipe-open-right');
+      wrap.classList.remove('swipe-open-status', 'swipe-open-actions');
       if (openSwipeRow === wrap) openSwipeRow = null;
     }
   });
@@ -714,7 +717,7 @@ function bindItemSwipe(wrap) {
   content.addEventListener('click', (e) => {
     if (Math.abs(currentX) > 10) return;
     if (e.target.closest('.status-badge')) return;
-    if (wrap.classList.contains('swipe-open-left') || wrap.classList.contains('swipe-open-right')) {
+    if (wrap.classList.contains('swipe-open-status') || wrap.classList.contains('swipe-open-actions')) {
       closeOpenSwipe();
       return;
     }
@@ -746,7 +749,7 @@ function renderItemCard(item) {
   const sc = STATUS_CLASS[item.status] || 'status-to-sort';
   const ts = esc(item.timestamp);
   const nextStatus = STATUS_OPTIONS[(STATUS_OPTIONS.findIndex((s) => s.value === item.status) + 1) % STATUS_OPTIONS.length];
-  return `<div class="item-swipe-wrap" data-timestamp="${ts}"><div class="item-swipe-behind item-swipe-behind-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="item-swipe-behind item-swipe-behind-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory||'')}</div></div><span class="status-badge ${sc}" data-timestamp="${ts}">${esc(item.status||'待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity||'1')}</p><p>尺寸: ${esc(item.size||'—')} · 重量: ${esc(item.weight||'—')}</p><p>£${esc(item.estimatedValue||'—')}</p>${item.photoLink?`<a href="${item.photoLink}" target="_blank" rel="noopener" style="color:#007AFF">View Photo</a>`:''}</div></div></div></div>`;
+  return `<div class="item-swipe-wrap" data-timestamp="${ts}"><div class="item-swipe-behind"><div class="swipe-actions-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="swipe-actions-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory||'')}</div></div><span class="status-badge ${sc}" data-timestamp="${ts}">${esc(item.status||'待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity||'1')}</p><p>尺寸: ${esc(item.size||'—')} · 重量: ${esc(item.weight||'—')}</p><p>£${esc(item.estimatedValue||'—')}</p>${item.photoLink?`<a href="${item.photoLink}" target="_blank" rel="noopener" style="color:#007AFF">View Photo</a>`:''}</div></div></div></div>`;
 }
 
 async function cycleStatus(item) {
