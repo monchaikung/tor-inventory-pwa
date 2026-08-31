@@ -7,9 +7,16 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 const ACTIVITY_SHEET_NAME = 'Activity Log';
+const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
+const VALID_STATUSES = ['待整理', '待打包', '已打包', '已入箱', '已寄出'];
+const OPEN_RATE_LIMIT_SEC = 3600;
+const ALLOWED_DEVICES = ['iPhone', 'iPad', 'Android', 'Mac', 'Windows', 'Unknown'];
+const ALLOWED_BROWSERS = ['Safari', 'Chrome iOS', 'Firefox iOS', 'Edge iOS', 'Chrome', 'Firefox', 'Edge', 'Other'];
+const ALLOWED_MODES = ['PWA', 'Browser'];
+const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v14' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v15' });
 }
 
 function doPost(e) {
@@ -44,16 +51,86 @@ function testSetup() {
 function verifyAccess_(idToken) {
   if (!idToken) return null;
   const resp = UrlFetchApp.fetch(
-    'https://oauth2.googleapis.com/tokeninfo?id_token=' + idToken,
+    'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken),
     { muteHttpExceptions: true }
   );
   if (resp.getResponseCode() !== 200) return null;
   const payload = JSON.parse(resp.getContentText());
+
+  const iss = String(payload.iss || '');
+  if (iss !== 'accounts.google.com' && iss !== 'https://accounts.google.com') return null;
+
+  const aud = String(payload.aud || '');
+  if (aud !== GOOGLE_CLIENT_ID) return null;
+
+  const exp = parseInt(payload.exp, 10);
+  if (!exp || exp * 1000 <= Date.now()) return null;
+
   const email = payload.email;
+  if (!email) return null;
+  if (payload.email_verified === 'false' || payload.email_verified === false) return null;
+
   const allowed = (PropertiesService.getScriptProperties().getProperty('ALLOWED_EMAILS') || '')
     .split(',').map(function(e) { return e.trim().toLowerCase(); });
   if (allowed.indexOf(email.toLowerCase()) === -1) return null;
   return { email: email };
+}
+
+function sanitizeSheetValue_(value) {
+  var s = String(value == null ? '' : value).substring(0, 500);
+  if (/^[=+\-@|\t\r]/.test(s)) s = "'" + s;
+  return s;
+}
+
+function isValidStatus_(status) {
+  return VALID_STATUSES.indexOf(String(status)) !== -1;
+}
+
+function isValidIp_(ip) {
+  if (!ip) return false;
+  var s = String(ip);
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(s)) {
+    var parts = s.split('.');
+    for (var i = 0; i < parts.length; i++) {
+      if (parseInt(parts[i], 10) > 255) return false;
+    }
+    return true;
+  }
+  if (/^[0-9a-fA-F:]+$/.test(s) && s.indexOf(':') !== -1) return s.length <= 45;
+  return false;
+}
+
+function sanitizeClientInfo_(client) {
+  client = client || {};
+  var out = {};
+  if (isValidIp_(client.ip)) out.ip = String(client.ip);
+  var dev = String(client.device || '');
+  if (ALLOWED_DEVICES.indexOf(dev) !== -1) out.device = dev;
+  var br = String(client.browser || '');
+  if (ALLOWED_BROWSERS.indexOf(br) !== -1) out.browser = br;
+  var lang = String(client.lang || '').substring(0, 20);
+  if (/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(lang)) out.lang = lang;
+  var tz = String(client.timezone || '').substring(0, 64);
+  if (/^[A-Za-z0-9_+\/-]+$/.test(tz)) out.timezone = tz;
+  var screen = String(client.screen || '');
+  if (/^\d{1,5}[x×]\d{1,5}$/i.test(screen)) out.screen = screen.replace(/x/i, '×');
+  var vp = String(client.viewport || '');
+  if (/^\d{1,5}[x×]\d{1,5}$/i.test(vp)) out.viewport = vp.replace(/x/i, '×');
+  var mode = String(client.mode || '');
+  if (ALLOWED_MODES.indexOf(mode) !== -1) out.mode = mode;
+  var net = String(client.network || '');
+  if (ALLOWED_NETWORKS.indexOf(net) !== -1) out.network = net;
+  if (client.online === false) out.online = false;
+  out.event = client.event === 'sign_in' ? 'sign_in' : 'session_resume';
+  return out;
+}
+
+function checkOpenRateLimit_(email) {
+  var cache = CacheService.getScriptCache();
+  var key = 'open_' + String(email).toLowerCase().replace(/[^a-z0-9@._-]/g, '');
+  if (cache.get(key)) return false;
+  cache.put(key, '1', OPEN_RATE_LIMIT_SEC);
+  return true;
 }
 
 function analyzeImage_(base64Image) {
@@ -262,10 +339,10 @@ function getActivitySheet_() {
 function logActivity_(email, action, itemDesc, detail) {
   getActivitySheet_().appendRow([
     new Date().toISOString(),
-    email || '',
-    action || '',
-    itemDesc || '',
-    detail || ''
+    sanitizeSheetValue_(email),
+    sanitizeSheetValue_(action),
+    sanitizeSheetValue_(itemDesc),
+    sanitizeSheetValue_(detail)
   ]);
 }
 
@@ -288,6 +365,9 @@ function getActivityLog_() {
 }
 
 function logAppOpen_(client, email) {
+  if (!checkOpenRateLimit_(email)) return { success: true, skipped: true };
+
+  client = sanitizeClientInfo_(client);
   const parts = [];
   if (client.ip) parts.push('IP: ' + client.ip);
   if (client.device) parts.push('Device: ' + client.device);
@@ -305,6 +385,7 @@ function logAppOpen_(client, email) {
 }
 
 function saveItem_(body, email) {
+  const status = isValidStatus_(body.status) ? body.status : '待整理';
   const timestamp = new Date().toISOString();
   const photoLink = savePhoto_(body.image, body.location, timestamp);
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
@@ -319,10 +400,10 @@ function saveItem_(body, email) {
     body.size || '',
     body.weight || '',
     body.estimatedValue || '',
-    body.status || '待整理',
+    status,
     photoLink
   ]);
-  logActivity_(email, 'added', desc, (body.location || '') + ' · ' + (body.status || '待整理'));
+  logActivity_(email, 'added', desc, (body.location || '') + ' · ' + status);
   return { success: true, photoLink: photoLink, timestamp: timestamp };
 }
 
@@ -376,6 +457,7 @@ function searchItems_(query) {
 }
 
 function updateStatus_(timestamp, status, email) {
+  if (!isValidStatus_(status)) throw new Error('Invalid status');
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
   const data = sheet.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
@@ -400,6 +482,7 @@ function editItem_(body, email) {
       if (body.image) {
         photoLink = savePhoto_(body.image, body.location, body.timestamp);
       }
+      var status = isValidStatus_(body.status) ? body.status : String(data[i][9] || '待整理');
       // getRange(row, col, numRows, numCols) — 1 row, 10 cols (B–K)
       sheet.getRange(i + 1, 2, 1, 10).setValues([[
         body.transportMode || String(data[i][1] || '寄箱'),
@@ -410,7 +493,7 @@ function editItem_(body, email) {
         body.size || '',
         body.weight || '',
         body.estimatedValue || '',
-        body.status || String(data[i][9] || '待整理'),
+        status,
         photoLink
       ]]);
       logActivity_(email, 'edited', body.itemDescription || String(data[i][4] || ''), body.location || '');
