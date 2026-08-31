@@ -7,7 +7,7 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v11' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v12' });
 }
 
 function doPost(e) {
@@ -335,7 +335,8 @@ function editItem_(body) {
       if (body.image) {
         photoLink = savePhoto_(body.image, body.location, body.timestamp);
       }
-      sheet.getRange(i + 1, 2, i + 1, 11).setValues([[
+      // getRange(row, col, numRows, numCols) — 1 row, 10 cols (B–K)
+      sheet.getRange(i + 1, 2, 1, 10).setValues([[
         body.transportMode || String(data[i][1] || '寄箱'),
         body.location || '',
         body.roomCategory || '',
