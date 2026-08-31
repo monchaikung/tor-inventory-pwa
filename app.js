@@ -284,6 +284,7 @@ async function processImageFile(file) {
     if (filled) showToast('AI filled the form 已自動填寫', 'success');
     else showToast('AI returned no details. Please fill manually. 請手動填寫', 'error');
   } catch (err) {
+    sessionStorage.removeItem('torAnalyze_' + hashBase64Sample(currentImageBase64 || ''));
     showToast(err.message || 'Photo failed.', 'error');
   } finally {
     hidePhotoLoading();
@@ -350,7 +351,7 @@ function fillFormFromAI(data) {
   const transportRaw = String(pickAiField(data, ['transportMode', 'transport_mode', '運送方式', 'mode'])).toLowerCase();
   const location = String(pickAiField(data, ['location', 'boxNumber', 'box_number', '存放位置', '箱號']));
   const roomCategory = String(pickAiField(data, ['roomCategory', 'room_category', '房間分類', 'room']));
-  const itemDescription = String(pickAiField(data, ['itemDescription', 'item_description', 'description', '物品描述', 'desc']));
+  const itemDescription = String(pickAiField(data, ['itemDescription', 'item_description', 'description', '物品描述', 'desc', 'item', 'name', 'title', 'product', 'object']));
   const quantity = pickAiField(data, ['quantity', 'qty', '數量']) || '1';
   const size = String(pickAiField(data, ['size', '尺寸']));
   const weight = String(pickAiField(data, ['weight', '重量']));

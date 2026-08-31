@@ -7,7 +7,7 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v10' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v11' });
 }
 
 function doPost(e) {
@@ -57,15 +57,25 @@ function analyzeImage_(base64Image) {
   if (!apiKey) throw new Error('GEMINI_API_KEY not set in Script Properties');
 
   const prompt =
-    'You analyze a photo for UK Transfer of Residence inventory. ' +
-    'Return JSON with exactly these keys: ' +
-    'transportMode, location, roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
-    'transportMode must be "shipped" or "handcarry". ' +
-    'location: box number like "1" for shipped, OR one of "隨身背囊","上機行李箱 (20吋)","上機大行李箱" for handcarry. ' +
-    'roomCategory: one of 客廳,睡房,廚房,浴室,書房,其他. ' +
-    'itemDescription: short English phrase for customs e.g. "Used laptop computer". Always fill itemDescription. ' +
-    'quantity: number. size/weight: short strings or "". estimatedValue: number in GBP or 0. ' +
-    'Small personal items -> handcarry. Large/furniture/electronics home items -> shipped.';
+    'Identify the main personal item in this photo for UK Transfer of Residence customs inventory. ' +
+    'Return JSON only with keys: transportMode, location, roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
+    'transportMode: "shipped" or "handcarry". itemDescription: required short English phrase e.g. "Used laptop computer". ' +
+    'roomCategory: 客廳|睡房|廚房|浴室|書房|其他. quantity: 1. estimatedValue: number GBP.';
+
+  const schema = {
+    type: 'OBJECT',
+    properties: {
+      transportMode: { type: 'STRING' },
+      location: { type: 'STRING' },
+      roomCategory: { type: 'STRING' },
+      itemDescription: { type: 'STRING' },
+      quantity: { type: 'NUMBER' },
+      size: { type: 'STRING' },
+      weight: { type: 'STRING' },
+      estimatedValue: { type: 'NUMBER' }
+    },
+    required: ['transportMode', 'itemDescription']
+  };
 
   const payload = {
     contents: [{ parts: [
@@ -74,19 +84,19 @@ function analyzeImage_(base64Image) {
     ]}],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 1024,
-      responseMimeType: 'application/json'
+      maxOutputTokens: 2048,
+      responseMimeType: 'application/json',
+      responseSchema: schema
     }
   };
 
-  // Prefer faster lite model first; fall back to 3.6 if busy/unavailable
-  const models = ['gemini-3.5-flash-lite', 'gemini-3.6-flash'];
+  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.5-flash-lite'];
   let resp = null;
   let lastError = '';
 
-  for (let m = 0; m < models.length; m++) {
+  for (var m = 0; m < models.length; m++) {
     const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[m] + ':generateContent?key=' + apiKey;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (var attempt = 1; attempt <= 2; attempt++) {
       resp = UrlFetchApp.fetch(url, {
         method: 'post',
         contentType: 'application/json',
@@ -115,56 +125,98 @@ function analyzeImage_(base64Image) {
   }
 
   const result = JSON.parse(resp.getContentText());
+  const blockReason = result.candidates && result.candidates[0] && result.candidates[0].finishReason;
+  if (blockReason === 'SAFETY') {
+    throw new Error('Photo blocked by safety filter. Try a clearer photo.');
+  }
+
   const text = extractGeminiText_(result);
   if (!text) throw new Error('AI returned an empty response. Please try again.');
 
-  try {
-    const suggestions = normalizeSuggestions_(parseAiJson_(text));
-    if (!suggestions.itemDescription) {
-      throw new Error('AI did not return item description');
-    }
-    return { success: true, suggestions: suggestions };
-  } catch (err) {
-    throw new Error('AI returned incomplete data. Please try the photo again.');
+  const suggestions = normalizeSuggestions_(parseAiJsonLoose_(text));
+  if (!suggestions.itemDescription) {
+    suggestions.itemDescription = guessDescription_(suggestions, text);
   }
+  if (!suggestions.itemDescription) {
+    throw new Error('AI could not identify the item. Try a clearer photo of one item.');
+  }
+
+  return { success: true, suggestions: suggestions };
 }
 
 function extractGeminiText_(result) {
   try {
-    var parts = result.candidates[0].content.parts || [];
-    var out = '';
+    var parts = (result.candidates[0].content && result.candidates[0].content.parts) || [];
+    var answer = '';
+    var fallback = '';
     for (var i = 0; i < parts.length; i++) {
-      // Skip pure thought parts when possible; still take any text
-      if (parts[i].text) out += parts[i].text;
+      if (!parts[i].text) continue;
+      fallback += parts[i].text;
+      if (parts[i].thought) continue;
+      answer = parts[i].text;
     }
-    return String(out || '').trim();
+    var text = String(answer || fallback || '').trim();
+    if (text.indexOf('{') !== -1 && text.lastIndexOf('}') > text.indexOf('{')) {
+      return text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+    }
+    return text;
   } catch (e) {
     return '';
   }
 }
 
-function parseAiJson_(text) {
-  var cleaned = String(text)
-    .replace(/```json/gi, '')
-    .replace(/```/g, '')
-    .trim();
-
+function parseAiJsonLoose_(text) {
+  var cleaned = String(text).replace(/```json/gi, '').replace(/```/g, '').trim();
   try {
     return JSON.parse(cleaned);
   } catch (e1) {
     var start = cleaned.indexOf('{');
     var end = cleaned.lastIndexOf('}');
     if (start !== -1 && end > start) {
-      return JSON.parse(cleaned.substring(start, end + 1));
+      try {
+        return JSON.parse(cleaned.substring(start, end + 1));
+      } catch (e2) {}
     }
-    throw e1;
+    return regexExtractFields_(cleaned);
   }
+}
+
+function regexExtractFields_(text) {
+  function grab(key) {
+    var re = new RegExp('"' + key + '"\\s*:\\s*"([^"]*)"', 'i');
+    var m = text.match(re);
+    return m ? m[1] : '';
+  }
+  function grabNum(key) {
+    var re = new RegExp('"' + key + '"\\s*:\\s*([0-9.]+)', 'i');
+    var m = text.match(re);
+    return m ? m[1] : '';
+  }
+  return {
+    transportMode: grab('transportMode') || grab('transport_mode'),
+    location: grab('location'),
+    roomCategory: grab('roomCategory') || grab('room_category'),
+    itemDescription: grab('itemDescription') || grab('item_description') || grab('description'),
+    quantity: grabNum('quantity') || 1,
+    size: grab('size'),
+    weight: grab('weight'),
+    estimatedValue: grabNum('estimatedValue') || 0
+  };
+}
+
+function guessDescription_(suggestions, rawText) {
+  var fromText = String(rawText || '');
+  var m = fromText.match(/"itemDescription"\s*:\s*"([^"]+)"/i) ||
+          fromText.match(/"description"\s*:\s*"([^"]+)"/i);
+  if (m) return m[1];
+  if (suggestions.roomCategory) return 'Used household item (' + suggestions.roomCategory + ')';
+  return '';
 }
 
 function normalizeSuggestions_(raw) {
   if (!raw || typeof raw !== 'object') return {};
-  // Unwrap accidental nesting
   if (raw.suggestions && typeof raw.suggestions === 'object') raw = raw.suggestions;
+  if (Array.isArray(raw) && raw.length) raw = raw[0];
 
   function pick() {
     for (var i = 0; i < arguments.length; i++) {
@@ -176,14 +228,15 @@ function normalizeSuggestions_(raw) {
 
   var transport = String(pick('transportMode', 'transport_mode', '運送方式', 'mode')).toLowerCase();
   if (transport.indexOf('hand') !== -1 || transport.indexOf('手提') !== -1) transport = 'handcarry';
-  else if (transport) transport = 'shipped';
   else transport = 'shipped';
+
+  var desc = String(pick('itemDescription', 'item_description', 'description', '物品描述', 'desc', 'item', 'name', 'title', 'product', 'object'));
 
   return {
     transportMode: transport,
     location: String(pick('location', 'boxNumber', 'box_number', '存放位置', '箱號')),
     roomCategory: String(pick('roomCategory', 'room_category', '房間分類', 'room')),
-    itemDescription: String(pick('itemDescription', 'item_description', 'description', '物品描述', 'desc')),
+    itemDescription: desc,
     quantity: pick('quantity', 'qty', '數量') || 1,
     size: String(pick('size', '尺寸')),
     weight: String(pick('weight', '重量')),
