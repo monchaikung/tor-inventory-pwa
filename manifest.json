@@ -1,8 +1,8 @@
 {
   "id": "/tor-inventory-pwa/",
-  "name": "ToR Inventory Logger",
-  "short_name": "ToR Log",
-  "description": "Log personal items for UK Transfer of Residence",
+  "name": "Log",
+  "short_name": "Log",
+  "description": "Personal item logger",
   "start_url": "/tor-inventory-pwa/",
   "scope": "/tor-inventory-pwa/",
   "display": "standalone",

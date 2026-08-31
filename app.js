@@ -816,7 +816,7 @@ function switchTab(tab) {
     items: 'Inventory',
     boxes: 'Boxes'
   };
-  $('navTitle').textContent = titles[tab] || 'ToR Log';
+  $('navTitle').textContent = titles[tab] || 'Log';
   if (tab === 'log') $('screenLog').classList.add('active');
   if (tab === 'items') { $('screenItems').classList.add('active'); renderFilteredList(); }
   if (tab === 'boxes') { $('screenBoxes').classList.add('active'); renderBoxSummary(); renderProgressBars(); }
