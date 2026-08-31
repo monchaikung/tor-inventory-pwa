@@ -6,8 +6,10 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   GEMINI_API_KEY = your Gemini API key
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
+const ACTIVITY_SHEET_NAME = 'Activity Log';
+
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v12' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v14' });
 }
 
 function doPost(e) {
@@ -18,11 +20,13 @@ function doPost(e) {
 
     switch (body.action) {
       case 'analyze': return jsonResponse(analyzeImage_(body.image));
-      case 'save': return jsonResponse(saveItem_(body));
+      case 'save': return jsonResponse(saveItem_(body, user.email));
       case 'search': return jsonResponse(searchItems_(body.query || ''));
-      case 'update': return jsonResponse(updateStatus_(body.timestamp, body.status));
-      case 'edit': return jsonResponse(editItem_(body));
-      case 'delete': return jsonResponse(deleteItem_(body.timestamp));
+      case 'update': return jsonResponse(updateStatus_(body.timestamp, body.status, user.email));
+      case 'edit': return jsonResponse(editItem_(body, user.email));
+      case 'delete': return jsonResponse(deleteItem_(body.timestamp, user.email));
+      case 'activity': return jsonResponse(getActivityLog_());
+      case 'open': return jsonResponse(logAppOpen_(body.client || {}, user.email));
       default: return jsonResponse({ success: false, error: 'Unknown action' });
     }
   } catch (err) {
@@ -244,16 +248,73 @@ function normalizeSuggestions_(raw) {
   };
 }
 
-function saveItem_(body) {
+function getActivitySheet_() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName(ACTIVITY_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(ACTIVITY_SHEET_NAME);
+    sheet.appendRow(['Timestamp', 'User', 'Action', 'Item', 'Detail']);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function logActivity_(email, action, itemDesc, detail) {
+  getActivitySheet_().appendRow([
+    new Date().toISOString(),
+    email || '',
+    action || '',
+    itemDesc || '',
+    detail || ''
+  ]);
+}
+
+function getActivityLog_() {
+  const sheet = getActivitySheet_();
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return { success: true, entries: [] };
+
+  const entries = [];
+  for (var i = data.length - 1; i >= 1 && entries.length < 50; i--) {
+    entries.push({
+      timestamp: String(data[i][0]),
+      user: String(data[i][1] || ''),
+      action: String(data[i][2] || ''),
+      item: String(data[i][3] || ''),
+      detail: String(data[i][4] || '')
+    });
+  }
+  return { success: true, entries: entries };
+}
+
+function logAppOpen_(client, email) {
+  const parts = [];
+  if (client.ip) parts.push('IP: ' + client.ip);
+  if (client.device) parts.push('Device: ' + client.device);
+  if (client.browser) parts.push('Browser: ' + client.browser);
+  if (client.lang) parts.push('Lang: ' + client.lang);
+  if (client.timezone) parts.push('TZ: ' + client.timezone);
+  if (client.screen) parts.push('Screen: ' + client.screen);
+  if (client.viewport) parts.push('Viewport: ' + client.viewport);
+  if (client.mode) parts.push('Mode: ' + client.mode);
+  if (client.network) parts.push('Network: ' + client.network);
+  if (client.online === false) parts.push('Offline');
+  const event = client.event === 'sign_in' ? 'Signed in' : 'Opened app';
+  logActivity_(email, 'open', event, parts.join(' · '));
+  return { success: true };
+}
+
+function saveItem_(body, email) {
   const timestamp = new Date().toISOString();
   const photoLink = savePhoto_(body.image, body.location, timestamp);
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  const desc = body.itemDescription || '';
   sheet.appendRow([
     timestamp,
     body.transportMode || '寄箱',
     body.location || '',
     body.roomCategory || '',
-    body.itemDescription || '',
+    desc,
     body.quantity || '1',
     body.size || '',
     body.weight || '',
@@ -261,6 +322,7 @@ function saveItem_(body) {
     body.status || '待整理',
     photoLink
   ]);
+  logActivity_(email, 'added', desc, (body.location || '') + ' · ' + (body.status || '待整理'));
   return { success: true, photoLink: photoLink, timestamp: timestamp };
 }
 
@@ -313,19 +375,22 @@ function searchItems_(query) {
   return { success: true, items: items.slice(0, 200), count: items.length };
 }
 
-function updateStatus_(timestamp, status) {
+function updateStatus_(timestamp, status, email) {
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
   const data = sheet.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(timestamp)) {
+      const oldStatus = String(data[i][9] || '');
+      const desc = String(data[i][4] || '');
       sheet.getRange(i + 1, 10).setValue(status);
+      logActivity_(email, 'status', desc, oldStatus + ' → ' + status);
       return { success: true };
     }
   }
   throw new Error('Item not found');
 }
 
-function editItem_(body) {
+function editItem_(body, email) {
   if (!body.timestamp) throw new Error('Missing timestamp');
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
   const data = sheet.getDataRange().getValues();
@@ -348,24 +413,27 @@ function editItem_(body) {
         body.status || String(data[i][9] || '待整理'),
         photoLink
       ]]);
+      logActivity_(email, 'edited', body.itemDescription || String(data[i][4] || ''), body.location || '');
       return { success: true, photoLink: photoLink, timestamp: body.timestamp };
     }
   }
   throw new Error('Item not found');
 }
 
-function deleteItem_(timestamp) {
+function deleteItem_(timestamp, email) {
   if (!timestamp) throw new Error('Missing timestamp');
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
   const data = sheet.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(timestamp)) {
+      const desc = String(data[i][4] || '');
       try {
         var link = String(data[i][10] || '');
         var match = link.match(/\/d\/([a-zA-Z0-9_-]+)/);
         if (match) DriveApp.getFileById(match[1]).setTrashed(true);
       } catch (e) {}
       sheet.deleteRow(i + 1);
+      logActivity_(email, 'deleted', desc, String(data[i][2] || ''));
       return { success: true };
     }
   }

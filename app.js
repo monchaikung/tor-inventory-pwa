@@ -34,6 +34,7 @@ let selectedStatus = '待整理';
 let filterTransport = '';
 let filterStatus = '';
 let filterLocation = '';
+let activityEntries = [];
 
 const $ = (id) => document.getElementById(id);
 
@@ -42,7 +43,11 @@ document.addEventListener('DOMContentLoaded', () => {
     navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
   }
 
-  if (sessionStorage.getItem('idToken')) { showMainApp(); loadAllItems(); } else showLoginScreen();
+  if (sessionStorage.getItem('idToken')) {
+    showMainApp();
+    loadAllItems();
+    logAppOpen('session_resume');
+  } else showLoginScreen();
   initGoogleSignIn();
   bindEvents();
 });
@@ -96,9 +101,11 @@ function initGoogleSignIn() {
 
 function handleCredentialResponse(response) {
   sessionStorage.setItem('idToken', response.credential);
+  sessionStorage.removeItem('openLogged');
   $('loginError').classList.add('hidden');
   showMainApp();
   loadAllItems();
+  logAppOpen('sign_in');
 }
 
 function getIdToken() {
@@ -109,6 +116,7 @@ function getIdToken() {
 
 function signOut() {
   sessionStorage.removeItem('idToken');
+  sessionStorage.removeItem('openLogged');
   allItems = [];
   cancelEdit();
   if (window.google?.accounts?.id) google.accounts.id.disableAutoSelect();
@@ -145,6 +153,72 @@ function showInstallBannerIfNeeded() {
 function dismissInstallBanner() {
   localStorage.setItem('installBannerDismissed', '1');
   $('installBanner')?.classList.add('hidden');
+}
+
+async function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function getDeviceLabel() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'iPad';
+  if (/Android/.test(ua)) return 'Android';
+  if (/Mac/.test(ua)) return 'Mac';
+  if (/Windows/.test(ua)) return 'Windows';
+  return navigator.platform || 'Unknown';
+}
+
+function getBrowserLabel() {
+  const ua = navigator.userAgent;
+  if (/CriOS/.test(ua)) return 'Chrome iOS';
+  if (/FxiOS/.test(ua)) return 'Firefox iOS';
+  if (/EdgiOS/.test(ua)) return 'Edge iOS';
+  if (/Safari/.test(ua) && !/Chrome/.test(ua)) return 'Safari';
+  if (/Chrome/.test(ua)) return 'Chrome';
+  if (/Firefox/.test(ua)) return 'Firefox';
+  if (/Edg/.test(ua)) return 'Edge';
+  return 'Other';
+}
+
+async function collectClientInfo(event) {
+  const info = {
+    event,
+    device: getDeviceLabel(),
+    browser: getBrowserLabel(),
+    lang: navigator.language || '',
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+    screen: `${screen.width}×${screen.height}`,
+    viewport: `${window.innerWidth}×${window.innerHeight}`,
+    mode: isStandalone() ? 'PWA' : 'Browser',
+    network: navigator.connection?.effectiveType || '',
+    online: navigator.onLine
+  };
+  try {
+    const res = await fetchWithTimeout('https://api.ipify.org?format=json', 4000);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ip) info.ip = data.ip;
+    }
+  } catch { /* IP lookup optional */ }
+  return info;
+}
+
+async function logAppOpen(event = 'session_resume') {
+  if (sessionStorage.getItem('openLogged') === '1') return;
+  if (!sessionStorage.getItem('idToken')) return;
+  try {
+    const client = await collectClientInfo(event);
+    await apiCall({ action: 'open', client });
+    sessionStorage.setItem('openLogged', '1');
+    if ($('screenDashboard')?.classList.contains('active')) loadActivityLog();
+  } catch { /* don't block app on audit failure */ }
 }
 
 async function apiCall(payload, retries = 2) {
@@ -539,6 +613,8 @@ async function deleteItem(item) {
     renderFilteredList();
     renderBoxSummary();
     renderProgressBars();
+    renderDashboard();
+    if (document.getElementById('screenDashboard')?.classList.contains('active')) loadActivityLog();
     showToast('Item deleted 已刪除', 'success');
   } catch (err) {
     showToast(err.message, 'error');
@@ -560,6 +636,97 @@ async function loadAllItems() {
   renderFilteredList();
   renderBoxSummary();
   renderProgressBars();
+  renderDashboard();
+}
+
+async function loadActivityLog() {
+  const container = $('activityLog');
+  if (container) container.innerHTML = '<p class="activity-loading">Loading activity…</p>';
+  try {
+    const data = await apiCall({ action: 'activity' });
+    activityEntries = data.entries || [];
+    renderActivityLog();
+  } catch (err) {
+    if (container) container.innerHTML = `<p class="activity-empty">${esc(err.message || 'Could not load activity.')}</p>`;
+  }
+}
+
+function renderDashboard() {
+  const statsEl = $('dashStats');
+  const barsEl = $('dashStatusBars');
+  if (!statsEl || !barsEl) return;
+
+  const total = allItems.length;
+  const packed = allItems.filter((i) => ['已打包', '已入箱', '已寄出'].includes(i.status)).length;
+  const notPacked = total - packed;
+  const shipped = allItems.filter((i) => i.transportMode === '寄箱').length;
+  const handCarry = allItems.filter((i) => i.transportMode === '手提').length;
+  let totalValue = 0;
+  let totalWeight = 0;
+  allItems.forEach((i) => {
+    const v = parseFloat(String(i.estimatedValue || '').replace(/[^0-9.]/g, ''));
+    if (!isNaN(v)) totalValue += v;
+    totalWeight += parseWeight(i.weight);
+  });
+  const pct = total ? Math.round((packed / total) * 100) : 0;
+
+  statsEl.innerHTML = `
+    <div class="dash-stat"><span class="dash-stat-value">${total}</span><span class="dash-stat-label">Items</span></div>
+    <div class="dash-stat"><span class="dash-stat-value">${pct}%</span><span class="dash-stat-label">Packed</span></div>
+    <div class="dash-stat"><span class="dash-stat-value">£${totalValue.toFixed(0)}</span><span class="dash-stat-label">Est. value</span></div>
+    <div class="dash-stat"><span class="dash-stat-value">${fmtW(totalWeight)}</span><span class="dash-stat-label">Weight</span></div>
+    <div class="dash-stat dash-stat-wide"><span class="dash-stat-value">${notPacked}</span><span class="dash-stat-label">Not yet packed · 📦 ${shipped} shipped · 🎒 ${handCarry} hand carry</span></div>`;
+
+  const statusCounts = {};
+  STATUS_OPTIONS.forEach((s) => { statusCounts[s.value] = 0; });
+  allItems.forEach((i) => { if (statusCounts[i.status] !== undefined) statusCounts[i.status]++; });
+
+  barsEl.innerHTML = STATUS_OPTIONS.map((s) => {
+    const n = statusCounts[s.value] || 0;
+    const w = total ? Math.round((n / total) * 100) : 0;
+    return `<div class="dash-bar-row"><span class="dash-bar-label">${esc(s.value)}</span><div class="dash-bar-track"><div class="dash-bar-fill ${STATUS_CLASS[s.value] || ''}" style="width:${w}%"></div></div><span class="dash-bar-count">${n}</span></div>`;
+  }).join('');
+}
+
+const ACTIVITY_META = {
+  open: { icon: '🔐', label: 'Access' },
+  added: { icon: '➕', label: 'Added' },
+  edited: { icon: '✏️', label: 'Edited' },
+  deleted: { icon: '🗑️', label: 'Deleted' },
+  status: { icon: '🔄', label: 'Status' }
+};
+
+function renderActivityLog() {
+  const container = $('activityLog');
+  if (!container) return;
+  if (!activityEntries.length) {
+    container.innerHTML = '<p class="activity-empty">No activity yet. Sign-ins and item changes will appear here.</p>';
+    return;
+  }
+  container.innerHTML = activityEntries.map((e) => {
+    const meta = ACTIVITY_META[e.action] || { icon: '•', label: e.action };
+    return `<div class="activity-row"><div class="activity-icon">${meta.icon}</div><div class="activity-body"><div class="activity-top"><span class="activity-user">${esc(formatUserName(e.user))}</span><span class="activity-action">${esc(meta.label)}</span><span class="activity-time">${esc(formatRelativeTime(e.timestamp))}</span></div><div class="activity-item">${esc(e.item || '—')}</div>${e.detail ? `<div class="activity-detail">${esc(e.detail)}</div>` : ''}</div></div>`;
+  }).join('');
+}
+
+function formatUserName(email) {
+  if (!email) return 'Unknown';
+  const local = email.split('@')[0] || email;
+  const name = local.split(/[._]/)[0] || local;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function getFilteredItems() {
@@ -759,7 +926,8 @@ async function cycleStatus(item) {
   try {
     await apiCall({ action: 'update', timestamp: item.timestamp, status: next.value });
     item.status = next.value;
-    renderFilteredList(); renderBoxSummary(); renderProgressBars();
+    renderFilteredList(); renderBoxSummary(); renderProgressBars(); renderDashboard();
+    if (document.getElementById('screenDashboard')?.classList.contains('active')) loadActivityLog();
     showToast(`Status → ${next.value}`, 'success');
   } catch (err) { showToast(err.message, 'error'); }
 }
@@ -812,11 +980,13 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
   const titles = {
+    dashboard: 'Dashboard',
     log: editingTimestamp ? 'Edit Item 編輯' : 'Log Item',
     items: 'Inventory',
     boxes: 'Boxes'
   };
   $('navTitle').textContent = titles[tab] || 'Log';
+  if (tab === 'dashboard') { $('screenDashboard').classList.add('active'); renderDashboard(); loadActivityLog(); }
   if (tab === 'log') $('screenLog').classList.add('active');
   if (tab === 'items') { $('screenItems').classList.add('active'); renderFilteredList(); }
   if (tab === 'boxes') { $('screenBoxes').classList.add('active'); renderBoxSummary(); renderProgressBars(); }

@@ -148,10 +148,27 @@
         <div id="boxSummary"></div>
       </div>
 
+      <!-- DASHBOARD SCREEN -->
+      <div id="screenDashboard" class="screen">
+        <div class="dash-grid" id="dashStats"></div>
+        <div class="ios-card dash-section">
+          <p class="dash-section-title">Status breakdown</p>
+          <div id="dashStatusBars"></div>
+        </div>
+        <div class="ios-card dash-section">
+          <p class="dash-section-title">Activity log</p>
+          <p class="dash-section-sub" id="activityLogHint">Sign-ins, app opens, and item changes</p>
+          <div id="activityLog"></div>
+        </div>
+      </div>
+
     </div>
 
     <!-- Tab Bar -->
     <nav class="tab-bar">
+      <button class="tab-btn" data-tab="dashboard">
+        <span class="tab-icon">📊</span>Dash
+      </button>
       <button class="tab-btn active" data-tab="log">
         <span class="tab-icon">➕</span>Log
       </button>
