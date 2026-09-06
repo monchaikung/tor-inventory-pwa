@@ -769,12 +769,12 @@ function reviewCardHtml(item) {
           </select>
         </div>
         <div class="review-field-row review-loc-shipped" style="${item.transportMode === '手提' ? 'display:none' : ''}">
-          <label>Box #</label>
-          <input type="text" data-field="location" value="${esc(item.transportMode === '寄箱' ? item.location : '')}" placeholder="e.g. 1" ${disabled ? 'disabled' : ''}>
+          <label>Box # <span class="field-required">必填</span></label>
+          <input type="text" data-field="location" value="${esc(item.transportMode === '寄箱' ? item.location : '')}" placeholder="上載 note 或喺度填，e.g. 1" ${disabled ? 'disabled' : ''} class="${item._highlightLocation && item.transportMode === '寄箱' && !item.location ? 'field-warn' : ''}">
         </div>
         <div class="review-field-row review-loc-hand" style="${item.transportMode === '手提' ? '' : 'display:none'}">
-          <label>Bag</label>
-          <select data-field="handLocation" ${disabled ? 'disabled' : ''}>
+          <label>Bag <span class="field-required">必填</span></label>
+          <select data-field="handLocation" ${disabled ? 'disabled' : ''} class="${item._highlightLocation && item.transportMode === '手提' && !item.location ? 'field-warn' : ''}">
             <option value="">Select…</option>
             ${handOpts}
           </select>
@@ -842,6 +842,10 @@ function bindReviewCard(card) {
       } else {
         item[field] = el.value;
       }
+      if (field === 'location' || field === 'handLocation') {
+        item._highlightLocation = false;
+        el.classList.remove('field-warn');
+      }
       updateReviewToolbar();
     };
     el.addEventListener('change', sync);
@@ -874,7 +878,7 @@ function pickAiField(data, keys) {
 function applySuggestionsToItem(item, data) {
   if (!data || typeof data !== 'object') return false;
   const transportRaw = String(pickAiField(data, ['transportMode', 'transport_mode', '運送方式', 'mode'])).toLowerCase();
-  const location = String(pickAiField(data, ['location', 'boxNumber', 'box_number', '存放位置', '箱號']));
+  // Box # / bag location is NEVER filled by AI — only upload note or manual PC edit.
   const roomCategory = String(pickAiField(data, ['roomCategory', 'room_category', '房間分類', 'room']));
   const itemDescription = String(pickAiField(data, ['itemDescription', 'item_description', 'description', '物品描述', 'desc', 'item', 'name', 'title']));
   const quantity = pickAiField(data, ['quantity', 'qty', '數量']) || '1';
@@ -884,10 +888,8 @@ function applySuggestionsToItem(item, data) {
 
   if (transportRaw.includes('hand') || transportRaw.includes('手提')) {
     item.transportMode = '手提';
-    item.location = location || item.location;
-  } else {
+  } else if (transportRaw) {
     item.transportMode = '寄箱';
-    item.location = location || item.location;
   }
   if (roomCategory) item.roomCategory = roomCategory;
   if (itemDescription) item.itemDescription = itemDescription;
@@ -955,11 +957,20 @@ async function submitReadyItems() {
 
   for (const item of targets) {
     if (!item.itemDescription.trim()) {
-      showToast(`Missing description: ${item.fileName}`, 'error');
+      showToast(`Missing description: ${item.fileName}`, 'error', 4000);
       return;
     }
     if (!item.location.trim()) {
-      showToast(`Missing box/bag: ${item.fileName}`, 'error');
+      const need = item.transportMode === '手提' ? 'Bag / 手提袋' : 'Box # / 箱號';
+      showToast(`請先填 ${need}（上載 note 或喺度改）：${item.fileName}`, 'error', 4500);
+      // Expand card + highlight empty location field
+      item._highlightLocation = true;
+      renderReviewQueue();
+      const card = document.querySelector(`.review-card[data-id="${CSS.escape(item.id)}"]`);
+      const locInput = card?.querySelector('[data-field="location"], [data-field="handLocation"]');
+      locInput?.classList.add('field-warn');
+      locInput?.focus();
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
   }
