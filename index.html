@@ -181,8 +181,16 @@
           <button class="ios-chip" data-status="已入箱">已入箱</button>
           <button class="ios-chip" data-status="已寄出">已寄出</button>
         </div>
+        <div class="bulk-bar" id="bulkBar">
+          <label class="bulk-select-all"><input type="checkbox" id="bulkSelectAll"> Select all</label>
+          <span class="bulk-count" id="bulkCount">0 selected</span>
+          <div class="bulk-actions">
+            <button type="button" class="ios-btn-secondary" id="bulkStatusBtn" disabled>Change status</button>
+            <button type="button" class="ios-btn-secondary" id="bulkClearBtn" disabled>Clear</button>
+          </div>
+        </div>
         <p class="result-count" id="resultCount"></p>
-        <p class="swipe-hint">← 左滑：改狀態 · 右滑：Edit / Delete →</p>
+        <p class="swipe-hint">勾選可批量改狀態 · swipe still works for single items</p>
         <div id="itemList"></div>
       </div>
 
