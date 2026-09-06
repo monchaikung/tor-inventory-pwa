@@ -68,6 +68,7 @@ function bindEvents() {
   $('bulkPhotoInput').addEventListener('change', onPhotosSelected);
   $('clearQueueBtn').addEventListener('click', clearReviewQueue);
   $('runAiBtn').addEventListener('click', runAiOnQueue);
+  $('rebuildTorListBtn')?.addEventListener('click', rebuildTorList);
   $('submitAllBtn').addEventListener('click', submitReadyItems);
   $('loadInboxBtn')?.addEventListener('click', loadInboxIntoReview);
 
@@ -1000,22 +1001,59 @@ async function analyzeOne(item) {
   }
 }
 
+function isAiFailure(item) {
+  return item.state === 'error' || (item.state === 'ready' && !String(item.itemDescription || '').trim());
+}
+
+
+async function rebuildTorList() {
+  try {
+    showToast('Rebuilding TOR Item List…', 'success');
+    const data = await apiCall({ action: 'rebuildTorList' });
+    const n = data.count || data.itemCount || 0;
+    showToast(`TOR list updated · ${n} line(s)`, 'success');
+  } catch (err) {
+    showToast(err.message || 'Could not rebuild TOR list', 'error');
+  }
+}
+
 async function runAiOnQueue() {
   if (reviewBusy) return;
-  const targets = reviewQueue.filter((q) => q.state === 'pending' || q.state === 'error');
+  const targets = reviewQueue.filter((q) => q.state === 'pending' || q.state === 'error' || isAiFailure(q));
   if (!targets.length) return;
   reviewBusy = true;
   updateReviewToolbar();
   showToast(`Running AI on ${targets.length} photo(s)…`, 'success');
+
+  // Round 1
   for (const item of targets) {
     await analyzeOne(item);
     renderReviewQueue();
     updateReviewToolbar();
   }
+
+  // Round 2: retry failures after first round finishes
+  const failed = targets.filter(isAiFailure);
+  if (failed.length) {
+    showToast(`Retrying ${failed.length} failed AI check(s)…`, 'success', 3500);
+    for (const item of failed) {
+      item.state = 'pending';
+      item.error = '';
+      await analyzeOne(item);
+      renderReviewQueue();
+      updateReviewToolbar();
+    }
+  }
+
   reviewBusy = false;
   updateReviewToolbar();
-  const ready = reviewQueue.filter((q) => q.state === 'ready').length;
-  showToast(`AI done · ${ready} ready to submit`, 'success');
+  const ready = reviewQueue.filter((q) => q.state === 'ready' && String(q.itemDescription || '').trim()).length;
+  const stillFail = targets.filter(isAiFailure).length;
+  if (stillFail) {
+    showToast(`AI done · ${ready} ready · ${stillFail} still failed`, 'error', 4000);
+  } else {
+    showToast(`AI done · ${ready} ready to submit`, 'success');
+  }
 }
 
 async function submitReadyItems() {
@@ -1091,8 +1129,11 @@ async function submitReadyItems() {
   reviewBusy = false;
   updateReviewToolbar();
   loadAllItems();
+  if (okCount) {
+    try { await apiCall({ action: 'rebuildTorList' }); } catch (e) { /* non-blocking */ }
+  }
   if (failCount) showToast(`Submitted ${okCount}, failed ${failCount}`, 'error');
-  else showToast(`Submitted ${okCount} item(s) to Sheet!`, 'success');
+  else showToast(`Submitted ${okCount} item(s) · TOR list updated`, 'success');
 }
 
 // ============ EDIT EXISTING ============
@@ -1215,6 +1256,7 @@ async function saveEditItem() {
       estimatedValue: $('estimatedValue').value.trim(),
       status: selectedStatus
     });
+    try { await apiCall({ action: 'rebuildTorList' }); } catch (e) {}
     showToast('Item updated! 已更新', 'success');
     editingTimestamp = null;
     switchTab('items');
@@ -1493,6 +1535,7 @@ async function deleteItem(item) {
     renderBoxSummary();
     renderProgressBars();
     renderDashboard();
+    try { await apiCall({ action: 'rebuildTorList' }); } catch (e) {}
     showToast('Item deleted 已刪除', 'success');
   } catch (err) {
     showToast(err.message, 'error');
