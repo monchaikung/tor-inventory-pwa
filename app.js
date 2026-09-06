@@ -1321,17 +1321,24 @@ function bindItemSwipe(wrap) {
   const maxLeft = 136;
   const maxRight = 110;
 
-  wrap.querySelector('[data-swipe="edit"]')?.addEventListener('click', (e) => {
+  const bindEdit = (el) => el?.addEventListener('click', (e) => {
+    e.preventDefault();
     e.stopPropagation();
     const item = allItems.find((i) => i.timestamp === ts);
     closeOpenSwipe();
     if (item) startEditItem(item);
   });
-  wrap.querySelector('[data-swipe="delete"]')?.addEventListener('click', (e) => {
+  const bindDelete = (el) => el?.addEventListener('click', (e) => {
+    e.preventDefault();
     e.stopPropagation();
     const item = allItems.find((i) => i.timestamp === ts);
     closeOpenSwipe();
     if (item) confirmDeleteItem(item);
+  });
+  wrap.querySelectorAll('[data-swipe="edit"], [data-action="edit"]').forEach(bindEdit);
+  wrap.querySelectorAll('[data-swipe="delete"], [data-action="delete"]').forEach(bindDelete);
+  wrap.querySelectorAll('[data-action="photo"]').forEach((el) => {
+    el.addEventListener('click', (e) => e.stopPropagation());
   });
   wrap.querySelector('[data-swipe="status"]')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1426,7 +1433,11 @@ function renderItemCard(item) {
   const sc = STATUS_CLASS[item.status] || 'status-to-sort';
   const ts = esc(item.timestamp);
   const nextStatus = STATUS_OPTIONS[(STATUS_OPTIONS.findIndex((s) => s.value === item.status) + 1) % STATUS_OPTIONS.length];
-  return `<div class="item-swipe-wrap" data-timestamp="${ts}"><div class="item-swipe-behind"><div class="swipe-actions-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="swipe-actions-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory || '')}</div></div><span class="status-badge ${sc}">${esc(item.status || '待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity || '1')}</p><p>尺寸: ${esc(item.size || '—')} · 重量: ${esc(item.weight || '—')}</p><p>£${esc(item.estimatedValue || '—')}</p>${item.photoLink ? `<a href="${esc(item.photoLink)}" target="_blank" rel="noopener" style="color:#007AFF">View Photo</a>` : ''}</div></div></div></div>`;
+  const photoBtn = item.photoLink
+    ? `<a class="item-action-btn" href="${esc(item.photoLink)}" target="_blank" rel="noopener" data-action="photo">View Photo</a>`
+    : '';
+  const actions = `<div class="item-actions"><button type="button" class="item-action-btn" data-action="edit">Edit</button><button type="button" class="item-action-btn destructive" data-action="delete">Delete</button>${photoBtn}</div>`;
+  return `<div class="item-swipe-wrap" data-timestamp="${ts}"><div class="item-swipe-behind"><div class="swipe-actions-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="swipe-actions-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory || '')}</div></div><span class="status-badge ${sc}">${esc(item.status || '待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity || '1')}</p><p>尺寸: ${esc(item.size || '—')} · 重量: ${esc(item.weight || '—')}</p><p>£${esc(item.estimatedValue || '—')}</p>${actions}</div>${actions.replace('item-actions"', 'item-actions item-actions-desktop"')}</div></div></div>`;
 }
 
 async function cycleStatus(item) {

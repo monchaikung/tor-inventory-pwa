@@ -423,10 +423,18 @@ html, body {
   display: flex;
   gap: 8px;
   margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.item-actions-desktop {
+  display: none;
+  padding: 0 16px 12px;
+  margin-top: 0;
 }
 
 .item-action-btn {
   flex: 1;
+  min-width: 72px;
   border: none;
   border-radius: 10px;
   padding: 10px 12px;
@@ -435,6 +443,9 @@ html, body {
   background: var(--ios-gray-5);
   color: var(--ios-blue);
   cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  box-sizing: border-box;
 }
 
 .item-action-btn:active {
@@ -443,6 +454,16 @@ html, body {
 
 .item-action-btn.destructive {
   color: var(--ios-red);
+}
+
+@media (min-width: 701px) {
+  .item-actions-desktop {
+    display: flex;
+  }
+  /* Avoid duplicate Edit/Delete when detail is expanded on desktop */
+  .item-detail .item-actions {
+    display: none;
+  }
 }
 
 .status-badge {
