@@ -16,7 +16,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v16' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash-lite', version: 'v17' });
 }
 
 function doPost(e) {
@@ -171,28 +171,25 @@ function analyzeImage_(base64Image) {
     }
   };
 
-  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.5-flash-lite'];
+  // Lite first for speed (desktop bulk). Fallback to flash once.
+  const models = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
   let resp = null;
   let lastError = '';
 
   for (var m = 0; m < models.length; m++) {
     const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[m] + ':generateContent?key=' + apiKey;
-    for (var attempt = 1; attempt <= 2; attempt++) {
-      resp = UrlFetchApp.fetch(url, {
-        method: 'post',
-        contentType: 'application/json',
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true
-      });
-      const code = resp.getResponseCode();
-      if (code === 200) break;
-
-      lastError = resp.getContentText();
-      const retryable = code === 503 || code === 429 || code === 500;
-      if (!retryable || attempt === 2) break;
-      Utilities.sleep(500);
-    }
-    if (resp.getResponseCode() === 200) break;
+    resp = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    const code = resp.getResponseCode();
+    if (code === 200) break;
+    lastError = resp.getContentText();
+    const retryable = code === 503 || code === 429 || code === 500;
+    if (!retryable) break;
+    Utilities.sleep(400);
   }
 
   if (resp.getResponseCode() !== 200) {

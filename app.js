@@ -25,7 +25,8 @@ const STATUS_CLASS = {
 };
 
 let allItems = [];
-let currentImageBase64 = null;
+let reviewQueue = [];
+let reviewBusy = false;
 let editingTimestamp = null;
 let editingPhotoLink = '';
 let transportMode = 'shipped';
@@ -35,6 +36,7 @@ let filterTransport = '';
 let filterStatus = '';
 let filterLocation = '';
 let activityEntries = [];
+let openSwipeRow = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -42,7 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
   }
-
   if (sessionStorage.getItem('idToken')) {
     showMainApp();
     loadAllItems();
@@ -54,23 +55,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function bindEvents() {
   $('signOutBtn').addEventListener('click', signOut);
-  $('takePhotoBtn').addEventListener('click', () => $('cameraInput').click());
-  $('importPhotoBtn').addEventListener('click', () => $('importInput').click());
-  $('cameraInput').addEventListener('change', handlePhotoCapture);
-  $('importInput').addEventListener('change', handlePhotoImport);
-  $('changePhotoBtn').addEventListener('click', clearPhoto);
-  $('saveBtn').addEventListener('click', saveItem);
-  $('cancelEditBtn')?.addEventListener('click', cancelEdit);
+  $('selectPhotosBtn').addEventListener('click', () => $('bulkPhotoInput').click());
+  $('bulkPhotoInput').addEventListener('change', onPhotosSelected);
+  $('clearQueueBtn').addEventListener('click', clearReviewQueue);
+  $('runAiBtn').addEventListener('click', runAiOnQueue);
+  $('submitAllBtn').addEventListener('click', submitReadyItems);
+
+  $('saveBtn').addEventListener('click', saveEditItem);
+  $('cancelEditBtn').addEventListener('click', cancelEdit);
   $('searchInput').addEventListener('input', onSearchInput);
   $('searchClear').addEventListener('click', clearSearch);
   $('handCarryPickerBtn').addEventListener('click', openHandCarryPicker);
   $('statusPickerBtn').addEventListener('click', openStatusPicker);
   $('actionSheetCancel').addEventListener('click', closeActionSheet);
-  $('actionSheetOverlay').addEventListener('click', (e) => { if (e.target === $('actionSheetOverlay')) closeActionSheet(); });
+  $('actionSheetOverlay').addEventListener('click', (e) => {
+    if (e.target === $('actionSheetOverlay')) closeActionSheet();
+  });
   $('dismissInstallBanner')?.addEventListener('click', dismissInstallBanner);
   $('modeShipped').addEventListener('click', () => setTransportMode('shipped'));
   $('modeHandCarry').addEventListener('click', () => setTransportMode('handcarry'));
-  document.querySelectorAll('.tab-btn').forEach((btn) => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
   document.querySelectorAll('#transportChips .ios-chip').forEach((chip) => {
     chip.addEventListener('click', () => {
       document.querySelectorAll('#transportChips .ios-chip').forEach((c) => c.classList.remove('active'));
@@ -106,6 +113,7 @@ function handleCredentialResponse(response) {
   showMainApp();
   loadAllItems();
   logAppOpen('sign_in');
+  switchTab('review');
 }
 
 function getIdToken() {
@@ -118,12 +126,17 @@ function signOut() {
   sessionStorage.removeItem('idToken');
   sessionStorage.removeItem('openLogged');
   allItems = [];
+  clearReviewQueue();
   cancelEdit();
   if (window.google?.accounts?.id) google.accounts.id.disableAutoSelect();
   showLoginScreen();
 }
 
-function showLoginScreen() { $('loginScreen').classList.remove('hidden'); $('mainApp').classList.add('hidden'); }
+function showLoginScreen() {
+  $('loginScreen').classList.remove('hidden');
+  $('mainApp').classList.add('hidden');
+}
+
 function showMainApp() {
   $('loginScreen').classList.add('hidden');
   $('mainApp').classList.remove('hidden');
@@ -135,7 +148,8 @@ function isStandalone() {
 }
 
 function isIOS() {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
 function showInstallBannerIfNeeded() {
@@ -145,9 +159,7 @@ function showInstallBannerIfNeeded() {
     banner.classList.add('hidden');
     return;
   }
-  if (isIOS() || /Android/i.test(navigator.userAgent)) {
-    banner.classList.remove('hidden');
-  }
+  if (isIOS() || /Android/i.test(navigator.userAgent)) banner.classList.remove('hidden');
 }
 
 function dismissInstallBanner() {
@@ -206,7 +218,7 @@ async function collectClientInfo(event) {
       const data = await res.json();
       if (data.ip) info.ip = data.ip;
     }
-  } catch { /* IP lookup optional */ }
+  } catch { /* optional */ }
   return info;
 }
 
@@ -217,8 +229,7 @@ async function logAppOpen(event = 'session_resume') {
     const client = await collectClientInfo(event);
     await apiCall({ action: 'open', client });
     sessionStorage.setItem('openLogged', '1');
-    if ($('screenDashboard')?.classList.contains('active')) loadActivityLog();
-  } catch { /* don't block app on audit failure */ }
+  } catch { /* ignore */ }
 }
 
 async function apiCall(payload, retries = 2) {
@@ -226,7 +237,9 @@ async function apiCall(payload, retries = 2) {
   if (!idToken) throw new Error('Not signed in');
 
   const hasImage = !!payload.image;
-  const timeoutMs = hasImage ? 90000 : 35000;
+  const timeoutMs = payload.action === 'analyze' ? 45000 : hasImage ? 90000 : 35000;
+  if (payload.action === 'analyze') retries = 1;
+
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const ctrl = new AbortController();
@@ -259,8 +272,8 @@ async function apiCall(payload, retries = 2) {
       const aborted = err.name === 'AbortError' || /aborted/i.test(msg);
       if (aborted) {
         throw new Error(hasImage
-          ? 'Save timed out. Try again on Wi‑Fi, or use a smaller photo. 儲存逾時，請再用 Wi‑Fi 試。'
-          : 'Request timed out. Check Wi‑Fi and try again. 請求逾時，請再試。');
+          ? 'Timed out. Try Wi‑Fi or a smaller photo. 逾時，請用 Wi‑Fi 或較細相片。'
+          : 'Request timed out. Check Wi‑Fi. 請求逾時。');
       }
       const network = /load failed|failed to fetch|networkerror|network request failed/i.test(msg);
       if (!network || attempt === retries) break;
@@ -272,58 +285,14 @@ async function apiCall(payload, retries = 2) {
 
   const msg = String(lastErr?.message || lastErr || 'Request failed');
   if (/load failed|failed to fetch|networkerror|network request failed/i.test(msg)) {
-    throw new Error('Network error. Check Wi-Fi and try again. 網路不穩，請再試。');
+    throw new Error('Network error. Check Wi-Fi. 網路不穩。');
   }
   throw lastErr;
 }
 
-let photoStatusTimer = null;
+// ============ REVIEW QUEUE ============
 
-const PHOTO_STATUS_STEPS = [
-  'Compressing photo… 壓縮照片',
-  'Uploading to server… 上載中',
-  'Checking with Gemini… 正在分析',
-  'Waiting for AI reply… 等候回覆',
-  'Almost done… 快完成'
-];
-
-function setPhotoStatus(msg) {
-  const el = $('photoStatusText');
-  if (el) el.textContent = msg;
-}
-
-function startPhotoStatus() {
-  stopPhotoStatus();
-  let i = 0;
-  setPhotoStatus(PHOTO_STATUS_STEPS[0]);
-  photoStatusTimer = setInterval(() => {
-    i = Math.min(i + 1, PHOTO_STATUS_STEPS.length - 1);
-    setPhotoStatus(PHOTO_STATUS_STEPS[i]);
-  }, 1500);
-}
-
-function stopPhotoStatus() {
-  if (photoStatusTimer) {
-    clearInterval(photoStatusTimer);
-    photoStatusTimer = null;
-  }
-}
-
-function showPhotoLoading(msg) {
-  startPhotoStatus();
-  if (msg) setPhotoStatus(msg);
-  $('photoLoading')?.classList.remove('hidden');
-}
-
-function hidePhotoLoading() {
-  stopPhotoStatus();
-  $('photoLoading')?.classList.add('hidden');
-}
-
-function handlePhotoCapture(e) { processImageFile(e.target.files[0]); e.target.value = ''; }
-function handlePhotoImport(e) { processImageFile(e.target.files[0]); e.target.value = ''; }
-
-function compressImageFile(file, maxDim = 1280, quality = 0.7) {
+function compressImageFile(file, maxDim = 1024, quality = 0.65) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('Could not read photo.'));
@@ -333,19 +302,13 @@ function compressImageFile(file, maxDim = 1280, quality = 0.7) {
         let w = img.width;
         let h = img.height;
         if (w > maxDim || h > maxDim) {
-          if (w >= h) {
-            h = Math.round((h * maxDim) / w);
-            w = maxDim;
-          } else {
-            w = Math.round((w * maxDim) / h);
-            h = maxDim;
-          }
+          if (w >= h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+          else { w = Math.round((w * maxDim) / h); h = maxDim; }
         }
         const canvas = document.createElement('canvas');
         canvas.width = w;
         canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, w, h);
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
         resolve(canvas.toDataURL('image/jpeg', quality));
       };
       img.onerror = () => reject(new Error('Could not process photo.'));
@@ -355,169 +318,14 @@ function compressImageFile(file, maxDim = 1280, quality = 0.7) {
   });
 }
 
-async function processImageFile(file) {
-  if (!file) return;
-  if (file.size > 15 * 1024 * 1024) { showToast('Image too large. Max 15 MB.', 'error'); return; }
-  showPhotoLoading('Reading photo… 讀取照片');
-  $('photoPreviewWrap').classList.remove('hidden');
-  try {
-    setPhotoStatus('Compressing photo… 壓縮照片');
-    const dataUrl = await compressImageFile(file);
-    currentImageBase64 = dataUrl.split(',')[1];
-    $('photoPreview').src = dataUrl;
-    setPhotoStatus('Uploading to server… 上載中');
-    const filled = await analyzeWithAI(currentImageBase64);
-    setPhotoStatus('Done! Filling form… 完成');
-    if (filled) showToast('AI filled the form 已自動填寫', 'success');
-    else showToast('AI returned no details. Please fill manually. 請手動填寫', 'error');
-  } catch (err) {
-    sessionStorage.removeItem('torAnalyze_' + hashBase64Sample(currentImageBase64 || ''));
-    showToast(err.message || 'Photo failed.', 'error');
-  } finally {
-    hidePhotoLoading();
-  }
-}
-
-function clearPhoto() {
-  currentImageBase64 = null;
-  $('photoPreview').src = '';
-  $('photoPreviewWrap').classList.add('hidden');
-  $('cameraInput').value = '';
-  $('importInput').value = '';
-  if (editingTimestamp && editingPhotoLink) {
-    $('photoPreview').src = editingPhotoLink;
-    $('photoPreviewWrap').classList.remove('hidden');
-  }
-}
-
-async function analyzeWithAI(base64Image) {
-  const cacheKey = 'torAnalyze_' + hashBase64Sample(base64Image);
-  const cached = sessionStorage.getItem(cacheKey);
-  if (cached) {
-    try {
-      const parsed = JSON.parse(cached);
-      if (parsed && parsed.itemDescription) {
-        setPhotoStatus('Using cached result 使用快取');
-        return fillFormFromAI(parsed);
-      }
-    } catch (_) {}
-    sessionStorage.removeItem(cacheKey);
-  }
-
-  setPhotoStatus('Checking with Gemini… 正在分析');
-  const data = await apiCall({ action: 'analyze', image: base64Image });
-  setPhotoStatus('Waiting for return… 處理回覆');
-  let suggestions = data.suggestions || data;
-  if (typeof suggestions === 'string') {
-    try { suggestions = JSON.parse(suggestions); } catch (_) { suggestions = {}; }
-  }
-  if (suggestions && suggestions.suggestions) suggestions = suggestions.suggestions;
-  const filled = fillFormFromAI(suggestions);
-  if (filled) sessionStorage.setItem(cacheKey, JSON.stringify(suggestions));
-  return filled;
-}
-
-function hashBase64Sample(b64) {
-  const sample = b64.slice(0, 1500) + b64.length + b64.slice(-1500);
-  let h = 0;
-  for (let i = 0; i < sample.length; i++) h = ((h << 5) - h + sample.charCodeAt(i)) | 0;
-  return String(h);
-}
-
-function pickAiField(data, keys) {
-  for (const k of keys) {
-    const v = data?.[k];
-    if (v !== undefined && v !== null && String(v).trim() !== '') return v;
-  }
-  return '';
-}
-
-function fillFormFromAI(data) {
-  if (!data || typeof data !== 'object') return false;
-
-  const transportRaw = String(pickAiField(data, ['transportMode', 'transport_mode', '運送方式', 'mode'])).toLowerCase();
-  const location = String(pickAiField(data, ['location', 'boxNumber', 'box_number', '存放位置', '箱號']));
-  const roomCategory = String(pickAiField(data, ['roomCategory', 'room_category', '房間分類', 'room']));
-  const itemDescription = String(pickAiField(data, ['itemDescription', 'item_description', 'description', '物品描述', 'desc', 'item', 'name', 'title', 'product', 'object']));
-  const quantity = pickAiField(data, ['quantity', 'qty', '數量']) || '1';
-  const size = String(pickAiField(data, ['size', '尺寸']));
-  const weight = String(pickAiField(data, ['weight', '重量']));
-  const estimatedValue = pickAiField(data, ['estimatedValue', 'estimated_value', 'value', '預估價值']);
-
-  if (transportRaw.includes('hand') || transportRaw.includes('手提')) {
-    setTransportMode('handcarry');
-    if (location) setHandCarry(location);
-  } else {
-    setTransportMode('shipped');
-    if (location) $('boxNumber').value = location;
-  }
-
-  if (roomCategory) $('roomCategory').value = roomCategory;
-  if (itemDescription) $('itemDescription').value = itemDescription;
-  if (quantity) $('quantity').value = quantity;
-  if (size) $('size').value = size;
-  if (weight) $('weight').value = weight;
-  if (estimatedValue !== '') $('estimatedValue').value = estimatedValue;
-
-  return Boolean(itemDescription);
-}
-
-function setTransportMode(mode) {
-  transportMode = mode;
-  $('modeShipped').classList.toggle('active', mode === 'shipped');
-  $('modeHandCarry').classList.toggle('active', mode === 'handcarry');
-  $('locationRowShipped').classList.toggle('hidden', mode !== 'shipped');
-  $('locationRowHandCarry').classList.toggle('hidden', mode !== 'handcarry');
-}
-
-function setHandCarry(label) {
-  selectedHandCarry = label;
-  const opt = HAND_CARRY_OPTIONS.find((o) => o.label === label);
-  if (opt) $('handCarryPickerBtn').textContent = `${opt.icon} ${opt.label} ›`;
-  else $('handCarryPickerBtn').textContent = `${label} ›`;
-}
-
-function openHandCarryPicker() {
-  openActionSheet(HAND_CARRY_OPTIONS.map((o) => ({ label: `${o.icon} ${o.label}`, value: o.label, selected: selectedHandCarry === o.label })), setHandCarry);
-}
-
-function openStatusPicker() {
-  openActionSheet(STATUS_OPTIONS.map((o) => ({ label: o.label, value: o.value, selected: selectedStatus === o.value })), (v) => {
-    selectedStatus = v;
-    $('statusPickerBtn').textContent = `${v} ›`;
-  });
-}
-
-function openActionSheet(options, callback) {
-  const container = $('actionSheetOptions');
-  container.innerHTML = '';
-  options.forEach((opt) => {
-    const btn = document.createElement('button');
-    btn.className = 'action-sheet-btn' + (opt.selected ? ' selected' : '') + (opt.destructive ? ' destructive' : '');
-    btn.textContent = opt.label;
-    btn.addEventListener('click', () => { callback(opt.value); closeActionSheet(); });
-    container.appendChild(btn);
-  });
-  $('actionSheetOverlay').classList.add('show');
-}
-
-function closeActionSheet() { $('actionSheetOverlay').classList.remove('show'); }
-
-function updateSaveButtonLabel() {
-  if (!$('saveBtn')) return;
-  if ($('saveBtn').disabled) return;
-  $('saveBtn').textContent = editingTimestamp ? 'Update item 更新' : 'Save to Google Drive';
-  $('cancelEditBtn')?.classList.toggle('hidden', !editingTimestamp);
-}
-
-async function shrinkBase64ForUpload(base64, maxChars = 450000) {
+async function shrinkBase64ForUpload(base64, maxChars = 350000) {
   if (!base64 || base64.length <= maxChars) return base64;
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       let w = img.width;
       let h = img.height;
-      const maxDim = 1024;
+      const maxDim = 960;
       if (w > maxDim || h > maxDim) {
         if (w >= h) { h = Math.round((h * maxDim) / w); w = maxDim; }
         else { w = Math.round((w * maxDim) / h); h = maxDim; }
@@ -526,9 +334,9 @@ async function shrinkBase64ForUpload(base64, maxChars = 450000) {
       canvas.width = w;
       canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      let quality = 0.65;
+      let quality = 0.6;
       let out = canvas.toDataURL('image/jpeg', quality).split(',')[1];
-      while (out.length > maxChars && quality > 0.4) {
+      while (out.length > maxChars && quality > 0.35) {
         quality -= 0.1;
         out = canvas.toDataURL('image/jpeg', quality).split(',')[1];
       }
@@ -539,53 +347,412 @@ async function shrinkBase64ForUpload(base64, maxChars = 450000) {
   });
 }
 
-async function saveItem() {
-  const transportLabel = transportMode === 'shipped' ? '寄箱' : '手提';
-  const location = transportMode === 'shipped' ? $('boxNumber').value.trim() : selectedHandCarry;
-  if (!location) { showToast(transportMode === 'shipped' ? 'Enter box number.' : 'Select hand-carry bag.', 'error'); return; }
-  if (!$('itemDescription').value.trim()) { showToast('Enter item description.', 'error'); return; }
-  if (!editingTimestamp && !currentImageBase64) { showToast('Take or import a photo first.', 'error'); return; }
-  if (editingTimestamp && !currentImageBase64 && !editingPhotoLink) { showToast('Take or import a photo first.', 'error'); return; }
+async function onPhotosSelected(e) {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
 
-  $('saveBtn').disabled = true;
-  $('saveBtn').textContent = editingTimestamp ? 'Updating…' : 'Saving…';
-  try {
-    const payload = {
-      action: editingTimestamp ? 'edit' : 'save',
-      transportMode: transportLabel,
-      location,
-      roomCategory: $('roomCategory').value.trim(),
-      itemDescription: $('itemDescription').value.trim(),
-      quantity: $('quantity').value || '1',
-      size: $('size').value.trim(),
-      weight: $('weight').value.trim(),
-      estimatedValue: $('estimatedValue').value.trim(),
-      status: selectedStatus
-    };
-    if (editingTimestamp) payload.timestamp = editingTimestamp;
-    if (currentImageBase64) {
-      $('saveBtn').textContent = 'Preparing photo…';
-      payload.image = await shrinkBase64ForUpload(currentImageBase64);
-      currentImageBase64 = payload.image;
-      $('saveBtn').textContent = editingTimestamp ? 'Updating…' : 'Uploading…';
+  showToast(`Loading ${files.length} photo(s)…`, 'success');
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    if (file.size > 20 * 1024 * 1024) {
+      showToast(`Skipped ${file.name} (too large)`, 'error');
+      continue;
     }
-
-    await apiCall(payload);
-    showToast(editingTimestamp ? 'Item updated! 已更新' : 'Item saved!', 'success');
-    clearForm();
-    switchTab('items');
-    loadAllItems();
-  } catch (err) { showToast(err.message || 'Save failed.', 'error'); }
-  finally {
-    $('saveBtn').disabled = false;
-    updateSaveButtonLabel();
+    try {
+      const dataUrl = await compressImageFile(file);
+      const base64 = await shrinkBase64ForUpload(dataUrl.split(',')[1]);
+      reviewQueue.push({
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        fileName: file.name,
+        previewUrl: 'data:image/jpeg;base64,' + base64,
+        imageBase64: base64,
+        state: 'pending',
+        error: '',
+        included: true,
+        transportMode: '寄箱',
+        location: '',
+        roomCategory: '',
+        itemDescription: '',
+        quantity: '1',
+        size: '',
+        weight: '',
+        estimatedValue: '',
+        itemStatus: '待整理'
+      });
+    } catch (err) {
+      showToast(`${file.name}: ${err.message}`, 'error');
+    }
   }
+  renderReviewQueue();
+  updateReviewToolbar();
+}
+
+function clearReviewQueue() {
+  if (reviewBusy) { showToast('Busy — wait for AI/submit to finish.', 'error'); return; }
+  reviewQueue = [];
+  renderReviewQueue();
+  updateReviewToolbar();
+}
+
+function updateReviewToolbar() {
+  const pending = reviewQueue.filter((q) => q.state === 'pending' || q.state === 'error').length;
+  const ready = reviewQueue.filter((q) => q.state === 'ready' && q.included).length;
+  const done = reviewQueue.filter((q) => q.state === 'done').length;
+  const analyzing = reviewQueue.filter((q) => q.state === 'analyzing' || q.state === 'submitting').length;
+  $('reviewProgress').textContent = reviewQueue.length
+    ? `${reviewQueue.length} photos · ${pending} need AI · ${ready} ready · ${done} submitted`
+    : 'No photos yet';
+  $('runAiBtn').disabled = reviewBusy || pending === 0;
+  $('submitAllBtn').disabled = reviewBusy || ready === 0;
+  if (analyzing) $('reviewProgress').textContent += ` · working…`;
+}
+
+function renderReviewQueue() {
+  const container = $('reviewQueue');
+  if (!reviewQueue.length) {
+    container.innerHTML = '<div class="empty-state">Select photos to start.</div>';
+    return;
+  }
+  container.innerHTML = reviewQueue.map((item) => reviewCardHtml(item)).join('');
+  container.querySelectorAll('.review-card').forEach((card) => bindReviewCard(card));
+}
+
+function reviewCardHtml(item) {
+  const stateLabel = {
+    pending: 'Waiting for AI',
+    analyzing: 'AI running…',
+    ready: 'Ready to submit',
+    error: 'AI failed — edit manually',
+    submitting: 'Submitting…',
+    done: 'Submitted ✓'
+  }[item.state] || item.state;
+
+  const disabled = item.state === 'done' || item.state === 'submitting' || item.state === 'analyzing';
+  const handOpts = HAND_CARRY_OPTIONS.map((o) =>
+    `<option value="${esc(o.label)}" ${item.location === o.label ? 'selected' : ''}>${esc(o.label)}</option>`
+  ).join('');
+  const statusOpts = STATUS_OPTIONS.map((s) =>
+    `<option value="${esc(s.value)}" ${item.itemStatus === s.value ? 'selected' : ''}>${esc(s.value)}</option>`
+  ).join('');
+
+  return `
+  <article class="review-card" data-id="${esc(item.id)}">
+    <div class="review-card-top">
+      <label class="review-include">
+        <input type="checkbox" data-field="included" ${item.included ? 'checked' : ''} ${item.state === 'done' ? 'disabled' : ''}>
+        Include
+      </label>
+      <span class="review-state review-state-${esc(item.state)}">${esc(stateLabel)}</span>
+      <button type="button" class="ios-text-btn review-remove" data-action="remove" ${disabled ? 'disabled' : ''}>Remove</button>
+    </div>
+    <div class="review-card-body">
+      <img class="review-thumb" src="${item.previewUrl}" alt="">
+      <div class="review-fields">
+        <p class="review-filename">${esc(item.fileName)}</p>
+        ${item.error ? `<p class="review-error">${esc(item.error)}</p>` : ''}
+        <div class="review-field-row">
+          <label>Transport</label>
+          <select data-field="transportMode" ${disabled ? 'disabled' : ''}>
+            <option value="寄箱" ${item.transportMode === '寄箱' ? 'selected' : ''}>寄箱</option>
+            <option value="手提" ${item.transportMode === '手提' ? 'selected' : ''}>手提</option>
+          </select>
+        </div>
+        <div class="review-field-row review-loc-shipped" style="${item.transportMode === '手提' ? 'display:none' : ''}">
+          <label>Box #</label>
+          <input type="text" data-field="location" value="${esc(item.transportMode === '寄箱' ? item.location : '')}" placeholder="e.g. 1" ${disabled ? 'disabled' : ''}>
+        </div>
+        <div class="review-field-row review-loc-hand" style="${item.transportMode === '手提' ? '' : 'display:none'}">
+          <label>Bag</label>
+          <select data-field="handLocation" ${disabled ? 'disabled' : ''}>
+            <option value="">Select…</option>
+            ${handOpts}
+          </select>
+        </div>
+        <div class="review-field-row">
+          <label>Room</label>
+          <input type="text" data-field="roomCategory" value="${esc(item.roomCategory)}" placeholder="客廳…" ${disabled ? 'disabled' : ''}>
+        </div>
+        <div class="review-field-row review-field-desc">
+          <label>Description</label>
+          <textarea data-field="itemDescription" rows="2" ${disabled ? 'disabled' : ''}>${esc(item.itemDescription)}</textarea>
+        </div>
+        <div class="review-field-grid">
+          <div class="review-field-row">
+            <label>Qty</label>
+            <input type="number" min="1" data-field="quantity" value="${esc(item.quantity)}" ${disabled ? 'disabled' : ''}>
+          </div>
+          <div class="review-field-row">
+            <label>Size</label>
+            <input type="text" data-field="size" value="${esc(item.size)}" ${disabled ? 'disabled' : ''}>
+          </div>
+          <div class="review-field-row">
+            <label>Weight</label>
+            <input type="text" data-field="weight" value="${esc(item.weight)}" ${disabled ? 'disabled' : ''}>
+          </div>
+          <div class="review-field-row">
+            <label>£</label>
+            <input type="text" data-field="estimatedValue" value="${esc(item.estimatedValue)}" ${disabled ? 'disabled' : ''}>
+          </div>
+        </div>
+        <div class="review-field-row">
+          <label>Status</label>
+          <select data-field="itemStatus" ${disabled ? 'disabled' : ''}>${statusOpts}</select>
+        </div>
+        <div class="review-card-actions">
+          <button type="button" class="ios-btn-secondary" data-action="reai" ${disabled ? 'disabled' : ''}>Re-run AI</button>
+        </div>
+      </div>
+    </div>
+  </article>`;
+}
+
+function bindReviewCard(card) {
+  const id = card.dataset.id;
+  const item = reviewQueue.find((q) => q.id === id);
+  if (!item) return;
+
+  card.querySelectorAll('[data-field]').forEach((el) => {
+    const sync = () => {
+      const field = el.dataset.field;
+      if (field === 'included') item.included = el.checked;
+      else if (field === 'handLocation') {
+        item.location = el.value;
+      } else if (field === 'transportMode') {
+        item.transportMode = el.value;
+        if (item.transportMode === '寄箱') {
+          const box = card.querySelector('[data-field="location"]');
+          item.location = box?.value || '';
+        } else {
+          const bag = card.querySelector('[data-field="handLocation"]');
+          item.location = bag?.value || '';
+        }
+        card.querySelector('.review-loc-shipped').style.display = item.transportMode === '寄箱' ? '' : 'none';
+        card.querySelector('.review-loc-hand').style.display = item.transportMode === '手提' ? '' : 'none';
+      } else {
+        item[field] = el.value;
+      }
+      updateReviewToolbar();
+    };
+    el.addEventListener('change', sync);
+    el.addEventListener('input', sync);
+  });
+
+  card.querySelector('[data-action="remove"]')?.addEventListener('click', () => {
+    if (reviewBusy) return;
+    reviewQueue = reviewQueue.filter((q) => q.id !== id);
+    renderReviewQueue();
+    updateReviewToolbar();
+  });
+
+  card.querySelector('[data-action="reai"]')?.addEventListener('click', async () => {
+    if (reviewBusy) return;
+    await analyzeOne(item);
+    renderReviewQueue();
+    updateReviewToolbar();
+  });
+}
+
+function pickAiField(data, keys) {
+  for (const k of keys) {
+    const v = data?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+  }
+  return '';
+}
+
+function applySuggestionsToItem(item, data) {
+  if (!data || typeof data !== 'object') return false;
+  const transportRaw = String(pickAiField(data, ['transportMode', 'transport_mode', '運送方式', 'mode'])).toLowerCase();
+  const location = String(pickAiField(data, ['location', 'boxNumber', 'box_number', '存放位置', '箱號']));
+  const roomCategory = String(pickAiField(data, ['roomCategory', 'room_category', '房間分類', 'room']));
+  const itemDescription = String(pickAiField(data, ['itemDescription', 'item_description', 'description', '物品描述', 'desc', 'item', 'name', 'title']));
+  const quantity = pickAiField(data, ['quantity', 'qty', '數量']) || '1';
+  const size = String(pickAiField(data, ['size', '尺寸']));
+  const weight = String(pickAiField(data, ['weight', '重量']));
+  const estimatedValue = pickAiField(data, ['estimatedValue', 'estimated_value', 'value', '預估價值']);
+
+  if (transportRaw.includes('hand') || transportRaw.includes('手提')) {
+    item.transportMode = '手提';
+    item.location = location || item.location;
+  } else {
+    item.transportMode = '寄箱';
+    item.location = location || item.location;
+  }
+  if (roomCategory) item.roomCategory = roomCategory;
+  if (itemDescription) item.itemDescription = itemDescription;
+  if (quantity) item.quantity = String(quantity);
+  if (size) item.size = size;
+  if (weight) item.weight = weight;
+  if (estimatedValue !== '') item.estimatedValue = String(estimatedValue);
+  return Boolean(item.itemDescription);
+}
+
+async function analyzeOne(item) {
+  item.state = 'analyzing';
+  item.error = '';
+  renderReviewQueue();
+  updateReviewToolbar();
+  try {
+    const data = await apiCall({ action: 'analyze', image: item.imageBase64 });
+    let suggestions = data.suggestions || data;
+    if (typeof suggestions === 'string') {
+      try { suggestions = JSON.parse(suggestions); } catch { suggestions = {}; }
+    }
+    if (suggestions?.suggestions) suggestions = suggestions.suggestions;
+    const ok = applySuggestionsToItem(item, suggestions);
+    item.state = 'ready';
+    if (!ok) {
+      item.error = 'AI returned incomplete data — please fill description.';
+    }
+  } catch (err) {
+    item.state = 'error';
+    item.error = err.message || 'AI failed';
+  }
+}
+
+async function runAiOnQueue() {
+  if (reviewBusy) return;
+  const targets = reviewQueue.filter((q) => q.state === 'pending' || q.state === 'error');
+  if (!targets.length) return;
+  reviewBusy = true;
+  updateReviewToolbar();
+  showToast(`Running AI on ${targets.length} photo(s)…`, 'success');
+  for (const item of targets) {
+    await analyzeOne(item);
+    renderReviewQueue();
+    updateReviewToolbar();
+  }
+  reviewBusy = false;
+  updateReviewToolbar();
+  const ready = reviewQueue.filter((q) => q.state === 'ready').length;
+  showToast(`AI done · ${ready} ready to submit`, 'success');
+}
+
+async function submitReadyItems() {
+  if (reviewBusy) return;
+  const targets = reviewQueue.filter((q) => q.state === 'ready' && q.included);
+  if (!targets.length) {
+    showToast('No included ready items to submit.', 'error');
+    return;
+  }
+
+  for (const item of targets) {
+    if (!item.itemDescription.trim()) {
+      showToast(`Missing description: ${item.fileName}`, 'error');
+      return;
+    }
+    if (!item.location.trim()) {
+      showToast(`Missing box/bag: ${item.fileName}`, 'error');
+      return;
+    }
+  }
+
+  reviewBusy = true;
+  updateReviewToolbar();
+  let okCount = 0;
+  let failCount = 0;
+
+  for (const item of targets) {
+    item.state = 'submitting';
+    renderReviewQueue();
+    updateReviewToolbar();
+    try {
+      const image = await shrinkBase64ForUpload(item.imageBase64);
+      await apiCall({
+        action: 'save',
+        transportMode: item.transportMode,
+        location: item.location.trim(),
+        roomCategory: item.roomCategory.trim(),
+        itemDescription: item.itemDescription.trim(),
+        quantity: item.quantity || '1',
+        size: item.size.trim(),
+        weight: item.weight.trim(),
+        estimatedValue: item.estimatedValue.trim(),
+        status: item.itemStatus || '待整理',
+        image
+      });
+      item.state = 'done';
+      okCount++;
+    } catch (err) {
+      item.state = 'ready';
+      item.error = err.message || 'Submit failed';
+      failCount++;
+    }
+    renderReviewQueue();
+    updateReviewToolbar();
+  }
+
+  reviewBusy = false;
+  updateReviewToolbar();
+  loadAllItems();
+  if (failCount) showToast(`Submitted ${okCount}, failed ${failCount}`, 'error');
+  else showToast(`Submitted ${okCount} item(s) to Sheet!`, 'success');
+}
+
+// ============ EDIT EXISTING ============
+
+function setTransportMode(mode) {
+  transportMode = mode;
+  $('modeShipped')?.classList.toggle('active', mode === 'shipped');
+  $('modeHandCarry')?.classList.toggle('active', mode === 'handcarry');
+  $('locationRowShipped')?.classList.toggle('hidden', mode !== 'shipped');
+  $('locationRowHandCarry')?.classList.toggle('hidden', mode !== 'handcarry');
+}
+
+function setHandCarry(label) {
+  selectedHandCarry = label;
+  const opt = HAND_CARRY_OPTIONS.find((o) => o.label === label);
+  if (opt) $('handCarryPickerBtn').textContent = `${opt.icon} ${opt.label} ›`;
+  else $('handCarryPickerBtn').textContent = `${label} ›`;
+}
+
+function openHandCarryPicker() {
+  openActionSheet(
+    HAND_CARRY_OPTIONS.map((o) => ({
+      label: `${o.icon} ${o.label}`,
+      value: o.label,
+      selected: selectedHandCarry === o.label
+    })),
+    setHandCarry
+  );
+}
+
+function openStatusPicker() {
+  openActionSheet(
+    STATUS_OPTIONS.map((s) => ({
+      label: s.label,
+      value: s.value,
+      selected: selectedStatus === s.value
+    })),
+    (v) => {
+      selectedStatus = v;
+      $('statusPickerBtn').textContent = `${v} ›`;
+    }
+  );
+}
+
+function openActionSheet(options, callback) {
+  const group = $('actionSheetOptions');
+  group.innerHTML = options.map((o) =>
+    `<button class="action-sheet-btn ${o.selected ? 'selected' : ''} ${o.destructive ? 'destructive' : ''}" data-value="${esc(o.value)}">${esc(o.label)}</button>`
+  ).join('');
+  group.querySelectorAll('button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      closeActionSheet();
+      callback(btn.dataset.value);
+    });
+  });
+  $('actionSheetOverlay').classList.add('show');
+}
+
+function closeActionSheet() {
+  $('actionSheetOverlay').classList.remove('show');
 }
 
 function startEditItem(item) {
   editingTimestamp = item.timestamp;
   editingPhotoLink = item.photoLink || '';
-  currentImageBase64 = null;
 
   if (item.transportMode === '手提') {
     setTransportMode('handcarry');
@@ -605,66 +772,53 @@ function startEditItem(item) {
   $('statusPickerBtn').textContent = `${selectedStatus} ›`;
 
   if (editingPhotoLink) {
-    $('photoPreview').src = editingPhotoLink;
-    $('photoPreviewWrap').classList.remove('hidden');
+    $('editPhotoPreview').src = editingPhotoLink;
+    $('editPhotoWrap').classList.remove('hidden');
   } else {
-    clearPhoto();
+    $('editPhotoPreview').src = '';
+    $('editPhotoWrap').classList.add('hidden');
   }
 
-  updateSaveButtonLabel();
-  switchTab('log');
-  $('navTitle').textContent = 'Edit Item 編輯';
-  window.scrollTo(0, 0);
+  switchTab('edit');
 }
 
 function cancelEdit() {
   editingTimestamp = null;
   editingPhotoLink = '';
-  clearForm();
-  updateSaveButtonLabel();
+  switchTab('items');
 }
 
-function clearForm() {
-  editingTimestamp = null;
-  editingPhotoLink = '';
-  $('boxNumber').value = '';
-  selectedHandCarry = '';
-  $('handCarryPickerBtn').textContent = 'Select bag ›';
-  ['roomCategory','itemDescription','size','weight','estimatedValue'].forEach((id) => $(id).value = '');
-  $('quantity').value = '1';
-  selectedStatus = '待整理';
-  $('statusPickerBtn').textContent = '待整理 ›';
-  setTransportMode('shipped');
-  currentImageBase64 = null;
-  $('photoPreview').src = '';
-  $('photoPreviewWrap').classList.add('hidden');
-  $('cameraInput').value = '';
-  $('importInput').value = '';
-  updateSaveButtonLabel();
-}
+async function saveEditItem() {
+  if (!editingTimestamp) return;
+  const location = transportMode === 'shipped' ? $('boxNumber').value.trim() : selectedHandCarry;
+  if (!location) { showToast(transportMode === 'shipped' ? 'Enter box number.' : 'Select hand-carry bag.', 'error'); return; }
+  if (!$('itemDescription').value.trim()) { showToast('Enter item description.', 'error'); return; }
 
-function confirmDeleteItem(item) {
-  openActionSheet([
-    { label: `Delete「${(item.itemDescription || 'item').slice(0, 24)}」`, value: 'delete', destructive: true }
-  ], (v) => {
-    if (v === 'delete') deleteItem(item);
-  });
-}
-
-async function deleteItem(item) {
+  $('saveBtn').disabled = true;
+  $('saveBtn').textContent = 'Updating…';
   try {
-    await apiCall({ action: 'delete', timestamp: item.timestamp });
-    allItems = allItems.filter((i) => i.timestamp !== item.timestamp);
-    localStorage.setItem('torItems', JSON.stringify(allItems));
-    if (editingTimestamp === item.timestamp) cancelEdit();
-    renderFilteredList();
-    renderBoxSummary();
-    renderProgressBars();
-    renderDashboard();
-    if (document.getElementById('screenDashboard')?.classList.contains('active')) loadActivityLog();
-    showToast('Item deleted 已刪除', 'success');
+    await apiCall({
+      action: 'edit',
+      timestamp: editingTimestamp,
+      transportMode: transportMode === 'shipped' ? '寄箱' : '手提',
+      location,
+      roomCategory: $('roomCategory').value.trim(),
+      itemDescription: $('itemDescription').value.trim(),
+      quantity: $('quantity').value || '1',
+      size: $('size').value.trim(),
+      weight: $('weight').value.trim(),
+      estimatedValue: $('estimatedValue').value.trim(),
+      status: selectedStatus
+    });
+    showToast('Item updated! 已更新', 'success');
+    editingTimestamp = null;
+    switchTab('items');
+    loadAllItems();
   } catch (err) {
-    showToast(err.message, 'error');
+    showToast(err.message || 'Update failed', 'error');
+  } finally {
+    $('saveBtn').disabled = false;
+    $('saveBtn').textContent = 'Update item';
   }
 }
 
@@ -747,7 +901,7 @@ function renderActivityLog() {
   const container = $('activityLog');
   if (!container) return;
   if (!activityEntries.length) {
-    container.innerHTML = '<p class="activity-empty">No activity yet. Sign-ins and item changes will appear here.</p>';
+    container.innerHTML = '<p class="activity-empty">No activity yet.</p>';
     return;
   }
   container.innerHTML = activityEntries.map((e) => {
@@ -783,7 +937,8 @@ function getFilteredItems() {
     if (filterStatus && item.status !== filterStatus) return false;
     if (filterLocation && item.location !== filterLocation) return false;
     if (!query) return true;
-    return [item.location, item.itemDescription, item.roomCategory, item.transportMode, item.status].join(' ').toLowerCase().includes(query);
+    return [item.location, item.itemDescription, item.roomCategory, item.transportMode, item.status]
+      .join(' ').toLowerCase().includes(query);
   });
 }
 
@@ -802,35 +957,16 @@ function clearSearch() {
 function getItemTypeEmoji(item) {
   const text = [item.itemDescription, item.roomCategory, item.size].filter(Boolean).join(' ').toLowerCase();
   const rules = [
-    [/kitchen|cook|pot|pan|plate|bowl|utensil|microwave|kettle|ware|廚|鍋|碗|碟|杯|刀|廚具/, '🍳'],
-    [/cloth|shirt|dress|jacket|coat|sock|underwear|scarf|衣|服|褲|鞋|衫/, '👕'],
-    [/book|novel|magazine|textbook|書|本/, '📚'],
-    [/laptop|computer|phone|tablet|keyboard|mouse|charger|cable|monitor|電|腦|機|鍵盤/, '💻'],
-    [/chair|table|desk|sofa|bed|furniture|cabinet|傢|椅|桌|床|櫃/, '🪑'],
-    [/toy|game|puzzle|doll|玩具/, '🧸'],
-    [/tool|drill|hammer|screwdriver|工具/, '🔧'],
-    [/cosmetic|makeup|skincare|perfume|化妝|護膚/, '💄'],
-    [/sport|gym|ball|racket|bike|運動/, '⚽'],
-    [/jewel|watch|ring|necklace|手錶|飾/, '⌚'],
-    [/pillow|blanket|duvet|bedding|枕|被|床單/, '🛏️'],
-    [/towel|soap|shampoo|toothbrush|浴|毛巾|牙刷/, '🧴'],
-    [/food|snack|tea|coffee|plate|食|茶|咖啡/, '🍽️'],
-    [/bag|suitcase|luggage|backpack|箱|袋|背囊/, '🧳'],
-    [/art|paint|frame|picture|畫|相框/, '🖼️'],
-    [/music|guitar|piano|speaker|headphone|音|耳機/, '🎸'],
-    [/clean|vacuum|detergent|mop|清|掃/, '🧹'],
-    [/lamp|light|bulb|燈/, '💡'],
-    [/plant|flower|vase|花|植物/, '🪴']
+    [/kitchen|cook|pot|pan|plate|bowl|廚|鍋|碗|碟/, '🍳'],
+    [/cloth|shirt|dress|jacket|衣|服|褲|鞋|衫/, '👕'],
+    [/book|書|本/, '📚'],
+    [/laptop|computer|phone|電|腦|機/, '💻'],
+    [/chair|table|desk|sofa|bed|傢|椅|桌|床/, '🪑'],
+    [/bag|suitcase|luggage|箱|袋/, '🧳']
   ];
   for (const [re, emoji] of rules) {
     if (re.test(text)) return emoji;
   }
-  const room = String(item.roomCategory || '');
-  if (/廚/.test(room)) return '🍳';
-  if (/睡/.test(room)) return '🛏️';
-  if (/客/.test(room)) return '🛋️';
-  if (/浴/.test(room)) return '🧴';
-  if (/書/.test(room)) return '📚';
   return item.transportMode === '手提' ? '🎒' : '📦';
 }
 
@@ -842,8 +978,6 @@ function renderItemThumb(item) {
   }
   return `<div class="item-thumb item-thumb-emoji" aria-hidden="true">${emoji}</div>`;
 }
-
-let openSwipeRow = null;
 
 function closeOpenSwipe() {
   if (openSwipeRow) {
@@ -861,110 +995,115 @@ function bindItemSwipe(wrap) {
   let currentX = 0;
   let tracking = false;
   let axis = null;
-  const maxLeft = 136;  // reveal Edit + Delete (swipe right)
-  const maxRight = 110; // reveal Status (swipe left)
+  const maxLeft = 136;
+  const maxRight = 110;
 
   wrap.querySelector('[data-swipe="edit"]')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const item = allItems.find((i) => i.timestamp === ts);
-    if (item) { closeOpenSwipe(); startEditItem(item); }
+    closeOpenSwipe();
+    if (item) startEditItem(item);
   });
   wrap.querySelector('[data-swipe="delete"]')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const item = allItems.find((i) => i.timestamp === ts);
-    if (item) { closeOpenSwipe(); confirmDeleteItem(item); }
+    closeOpenSwipe();
+    if (item) confirmDeleteItem(item);
   });
   wrap.querySelector('[data-swipe="status"]')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const item = allItems.find((i) => i.timestamp === ts);
-    if (item) { closeOpenSwipe(); cycleStatus(item); }
+    closeOpenSwipe();
+    if (item) cycleStatus(item);
   });
 
-  content.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
-    startX = e.touches[0].clientX;
-    startY = e.touches[0].clientY;
-    currentX = 0;
-    tracking = true;
-    axis = null;
-    content.style.transition = 'none';
+  const onStart = (x, y) => {
     if (openSwipeRow && openSwipeRow !== wrap) closeOpenSwipe();
-  }, { passive: true });
-
-  content.addEventListener('touchmove', (e) => {
+    startX = x; startY = y; currentX = 0; tracking = true; axis = null;
+  };
+  const onMove = (x, y, e) => {
     if (!tracking) return;
-    const dx = e.touches[0].clientX - startX;
-    const dy = e.touches[0].clientY - startY;
+    const dx = x - startX;
+    const dy = y - startY;
     if (!axis) {
       if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
       axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-      if (axis === 'y') { tracking = false; return; }
     }
     if (axis !== 'x') return;
     e.preventDefault();
     currentX = Math.max(-maxRight, Math.min(maxLeft, dx));
     content.style.transform = `translateX(${currentX}px)`;
-  }, { passive: false });
-
-  content.addEventListener('touchend', () => {
-    if (!tracking || axis !== 'x') { tracking = false; return; }
+  };
+  const onEnd = () => {
+    if (!tracking) return;
     tracking = false;
-    content.style.transition = 'transform 0.2s ease';
-    // Finger moves left → content left → show Status on the right
-    if (currentX <= -48) {
-      content.style.transform = `translateX(-${maxRight}px)`;
-      wrap.classList.add('swipe-open-status');
-      wrap.classList.remove('swipe-open-actions');
-      openSwipeRow = wrap;
-    // Finger moves right → content right → show Edit/Delete on the left
-    } else if (currentX >= 48) {
-      content.style.transform = `translateX(${maxLeft}px)`;
-      wrap.classList.add('swipe-open-actions');
-      wrap.classList.remove('swipe-open-status');
-      openSwipeRow = wrap;
-    } else {
-      content.style.transform = '';
-      wrap.classList.remove('swipe-open-status', 'swipe-open-actions');
-      if (openSwipeRow === wrap) openSwipeRow = null;
+    if (axis === 'x') {
+      if (currentX > 60) {
+        content.style.transform = `translateX(${maxLeft}px)`;
+        wrap.classList.add('swipe-open-actions');
+        openSwipeRow = wrap;
+      } else if (currentX < -50) {
+        content.style.transform = `translateX(${-maxRight}px)`;
+        wrap.classList.add('swipe-open-status');
+        openSwipeRow = wrap;
+      } else {
+        content.style.transform = '';
+        wrap.classList.remove('swipe-open-status', 'swipe-open-actions');
+        if (openSwipeRow === wrap) openSwipeRow = null;
+      }
     }
-  });
+  };
 
-  content.addEventListener('click', (e) => {
-    if (Math.abs(currentX) > 10) return;
-    if (e.target.closest('.status-badge')) return;
-    if (wrap.classList.contains('swipe-open-status') || wrap.classList.contains('swipe-open-actions')) {
-      closeOpenSwipe();
-      return;
-    }
-    content.querySelector('.item-detail')?.classList.toggle('hidden');
+  content.addEventListener('touchstart', (e) => onStart(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+  content.addEventListener('touchmove', (e) => onMove(e.touches[0].clientX, e.touches[0].clientY, e), { passive: false });
+  content.addEventListener('touchend', onEnd);
+  content.addEventListener('click', () => {
+    if (openSwipeRow === wrap) { closeOpenSwipe(); return; }
+    const detail = wrap.querySelector('.item-detail');
+    detail?.classList.toggle('hidden');
   });
+}
+
+function confirmDeleteItem(item) {
+  openActionSheet(
+    [{ label: `Delete「${(item.itemDescription || 'item').slice(0, 24)}」`, value: 'delete', destructive: true }],
+    async (v) => { if (v === 'delete') await deleteItem(item); }
+  );
+}
+
+async function deleteItem(item) {
+  try {
+    await apiCall({ action: 'delete', timestamp: item.timestamp });
+    allItems = allItems.filter((i) => i.timestamp !== item.timestamp);
+    localStorage.setItem('torItems', JSON.stringify(allItems));
+    if (editingTimestamp === item.timestamp) cancelEdit();
+    renderFilteredList();
+    renderBoxSummary();
+    renderProgressBars();
+    renderDashboard();
+    showToast('Item deleted 已刪除', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 }
 
 function renderFilteredList() {
-  const items = getFilteredItems();
-  const total = allItems.length;
-  if ($('resultCount')) $('resultCount').textContent = items.length === total ? `Showing ${total} items` : `Showing ${items.length} of ${total}`;
   const list = $('itemList');
+  if (!list) return;
+  const items = getFilteredItems();
+  $('resultCount').textContent = `${items.length} result(s)`;
   if (!items.length) { list.innerHTML = '<div class="empty-state">No items found.</div>'; return; }
-  openSwipeRow = null;
   list.innerHTML = items.map(renderItemCard).join('');
   list.querySelectorAll('.item-swipe-wrap').forEach(bindItemSwipe);
-  list.querySelectorAll('.status-badge').forEach((badge) => {
-    badge.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const item = allItems.find((i) => i.timestamp === badge.dataset.timestamp);
-      if (item) cycleStatus(item);
-    });
-  });
 }
 
 function renderItemCard(item) {
-  const transportIcon = item.transportMode === '手提' ? '🎒' : '📦';
   const thumb = renderItemThumb(item);
+  const transportIcon = item.transportMode === '手提' ? '🎒' : '📦';
   const sc = STATUS_CLASS[item.status] || 'status-to-sort';
   const ts = esc(item.timestamp);
   const nextStatus = STATUS_OPTIONS[(STATUS_OPTIONS.findIndex((s) => s.value === item.status) + 1) % STATUS_OPTIONS.length];
-  return `<div class="item-swipe-wrap" data-timestamp="${ts}"><div class="item-swipe-behind"><div class="swipe-actions-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="swipe-actions-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory||'')}</div></div><span class="status-badge ${sc}" data-timestamp="${ts}">${esc(item.status||'待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity||'1')}</p><p>尺寸: ${esc(item.size||'—')} · 重量: ${esc(item.weight||'—')}</p><p>£${esc(item.estimatedValue||'—')}</p>${item.photoLink?`<a href="${item.photoLink}" target="_blank" rel="noopener" style="color:#007AFF">View Photo</a>`:''}</div></div></div></div>`;
+  return `<div class="item-swipe-wrap" data-timestamp="${ts}"><div class="item-swipe-behind"><div class="swipe-actions-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="swipe-actions-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory || '')}</div></div><span class="status-badge ${sc}">${esc(item.status || '待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity || '1')}</p><p>尺寸: ${esc(item.size || '—')} · 重量: ${esc(item.weight || '—')}</p><p>£${esc(item.estimatedValue || '—')}</p>${item.photoLink ? `<a href="${esc(item.photoLink)}" target="_blank" rel="noopener" style="color:#007AFF">View Photo</a>` : ''}</div></div></div></div>`;
 }
 
 async function cycleStatus(item) {
@@ -973,15 +1112,21 @@ async function cycleStatus(item) {
   try {
     await apiCall({ action: 'update', timestamp: item.timestamp, status: next.value });
     item.status = next.value;
-    renderFilteredList(); renderBoxSummary(); renderProgressBars(); renderDashboard();
-    if (document.getElementById('screenDashboard')?.classList.contains('active')) loadActivityLog();
+    renderFilteredList();
+    renderBoxSummary();
+    renderProgressBars();
+    renderDashboard();
     showToast(`Status → ${next.value}`, 'success');
-  } catch (err) { showToast(err.message, 'error'); }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 }
 
 function renderProgressBars() {
-  const t = allItems.length, p = allItems.filter((i) => ['已打包','已入箱','已寄出'].includes(i.status)).length;
-  const ib = allItems.filter((i) => i.status === '已入箱').length, sh = allItems.filter((i) => i.status === '已寄出').length;
+  const t = allItems.length;
+  const p = allItems.filter((i) => ['已打包', '已入箱', '已寄出'].includes(i.status)).length;
+  const ib = allItems.filter((i) => i.status === '已入箱').length;
+  const sh = allItems.filter((i) => i.status === '已寄出').length;
   const text = `📦 ${t} items · ✅ ${p} packed · 📥 ${ib} in box · 🚚 ${sh} shipped`;
   if ($('progressBar')) $('progressBar').textContent = text;
   if ($('progressBarBoxes')) $('progressBarBoxes').textContent = text;
@@ -989,27 +1134,35 @@ function renderProgressBars() {
 
 function renderBoxSummary() {
   const container = $('boxSummary');
-  const shipped = {}, handCarry = {};
+  if (!container) return;
+  const shipped = {};
+  const handCarry = {};
   HAND_CARRY_OPTIONS.forEach((o) => { handCarry[o.label] = { items: [], packed: 0, weight: 0 }; });
   allItems.forEach((item) => {
     const bucket = item.transportMode === '手提' ? handCarry : shipped;
     const key = item.location || 'Unknown';
     if (!bucket[key]) bucket[key] = { items: [], packed: 0, weight: 0 };
     bucket[key].items.push(item);
-    if (['已打包','已入箱','已寄出'].includes(item.status)) bucket[key].packed++;
+    if (['已打包', '已入箱', '已寄出'].includes(item.status)) bucket[key].packed++;
     bucket[key].weight += parseWeight(item.weight);
   });
   let html = '<p class="location-section-title">寄箱 Shipped</p>';
   const boxKeys = Object.keys(shipped).sort();
-  html += boxKeys.length ? boxKeys.map((k) => locRow(`📦 Box ${k}`, shipped[k], k, 'shipped')).join('') : '<div class="empty-state" style="padding:16px">No shipped items yet.</div>';
+  html += boxKeys.length
+    ? boxKeys.map((k) => locRow(`📦 Box ${k}`, shipped[k], k, 'shipped')).join('')
+    : '<div class="empty-state" style="padding:16px">No shipped items yet.</div>';
   html += '<p class="location-section-title">手提 Hand Carry</p>';
-  html += HAND_CARRY_OPTIONS.map((o) => locRow(`${o.icon} ${o.label}`, handCarry[o.label]||{items:[],packed:0,weight:0}, o.label, 'handcarry')).join('');
+  html += HAND_CARRY_OPTIONS.map((o) =>
+    locRow(`${o.icon} ${o.label}`, handCarry[o.label] || { items: [], packed: 0, weight: 0 }, o.label, 'handcarry')
+  ).join('');
   container.innerHTML = html;
   container.querySelectorAll('.location-row').forEach((row) => {
     row.addEventListener('click', () => {
       filterLocation = row.dataset.location;
       filterTransport = row.dataset.transport === 'handcarry' ? '手提' : '寄箱';
-      document.querySelectorAll('#transportChips .ios-chip').forEach((c) => c.classList.toggle('active', c.dataset.transport === filterTransport));
+      document.querySelectorAll('#transportChips .ios-chip').forEach((c) =>
+        c.classList.toggle('active', c.dataset.transport === filterTransport)
+      );
       switchTab('items');
     });
   });
@@ -1019,27 +1172,32 @@ function locRow(title, b, location, transport) {
   return `<div class="location-row" data-location="${esc(location)}" data-transport="${transport}"><div><div style="font-weight:500">${title}</div><div style="font-size:13px;color:#8E8E93;margin-top:2px">${b.items.length} items · ${b.packed} packed · ${fmtW(b.weight)}</div></div><span style="color:#8E8E93">›</span></div>`;
 }
 
-function parseWeight(w) { const n = parseFloat(String(w||'').replace(/[^0-9.]/g,'')); return isNaN(n)?0:n; }
-function fmtW(w) { return w>0?`${w.toFixed(1)}kg`:'—'; }
+function parseWeight(w) {
+  const n = parseFloat(String(w || '').replace(/[^0-9.]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+function fmtW(w) { return w > 0 ? `${w.toFixed(1)}kg` : '—'; }
 
 function switchTab(tab) {
   closeOpenSwipe();
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
   const titles = {
-    dashboard: 'Dashboard',
-    log: editingTimestamp ? 'Edit Item 編輯' : 'Log Item',
+    review: 'Review',
+    edit: 'Edit Item',
     items: 'Inventory',
-    boxes: 'Boxes'
+    boxes: 'Boxes',
+    dashboard: 'Dashboard'
   };
-  $('navTitle').textContent = titles[tab] || 'Log';
-  if (tab === 'dashboard') { $('screenDashboard').classList.add('active'); renderDashboard(); loadActivityLog(); }
-  if (tab === 'log') $('screenLog').classList.add('active');
+  $('navTitle').textContent = titles[tab] || 'Review';
+  if (tab === 'review') $('screenReview').classList.add('active');
+  if (tab === 'edit') $('screenEdit').classList.add('active');
   if (tab === 'items') { $('screenItems').classList.add('active'); renderFilteredList(); }
   if (tab === 'boxes') { $('screenBoxes').classList.add('active'); renderBoxSummary(); renderProgressBars(); }
+  if (tab === 'dashboard') { $('screenDashboard').classList.add('active'); renderDashboard(); loadActivityLog(); }
 }
 
-function showToast(msg, type='success') {
+function showToast(msg, type = 'success') {
   const t = $('toast');
   if (!t) return;
   if (showToast._timer) clearTimeout(showToast._timer);
@@ -1051,4 +1209,9 @@ function showToast(msg, type='success') {
   }, 2500);
 }
 
-function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = String(str); return d.innerHTML; }
+function esc(str) {
+  if (!str) return '';
+  const d = document.createElement('div');
+  d.textContent = String(str);
+  return d.innerHTML;
+}
