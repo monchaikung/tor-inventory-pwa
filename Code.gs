@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v23' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v24' });
 }
 
 function doPost(e) {
@@ -157,6 +157,7 @@ function analyzeImage_(base64Image, opts) {
     'Return JSON only with keys: roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
     'Do NOT invent transport mode, box numbers, or bag locations. ' +
     'itemDescription: required short English phrase e.g. "Used laptop computer". ' +
+    'size: ONLY numeric cm dimensions e.g. "20x15x5 cm" or "30x20 cm". Never use A4, Small, Medium, Large, or paper sizes. If unsure, leave size empty. ' +
     'roomCategory: 客廳|睡房|廚房|浴室|書房|其他. quantity: 1. estimatedValue: number GBP.';
 
   const schema = {
@@ -316,7 +317,7 @@ function regexExtractFields_(text) {
     roomCategory: grab('roomCategory') || grab('room_category'),
     itemDescription: grab('itemDescription') || grab('item_description') || grab('description'),
     quantity: grabNum('quantity') || 1,
-    size: grab('size'),
+    size: sanitizeSizeCm_(grab('size')),
     weight: grab('weight'),
     estimatedValue: grabNum('estimatedValue') || 0
   };
@@ -329,6 +330,27 @@ function guessDescription_(suggestions, rawText) {
   if (m) return m[1];
   if (suggestions.roomCategory) return 'Used household item (' + suggestions.roomCategory + ')';
   return '';
+}
+
+
+function sanitizeSizeCm_(raw) {
+  var s = String(raw || '').trim();
+  if (!s) return '';
+  var lower = s.toLowerCase();
+  // Reject qualitative / paper sizes
+  if (/\b(a[0-6]|b[0-6]|letter|legal|small|medium|large|xl|xxl|tiny|huge|big)\b/i.test(lower)) return '';
+  if (/^(xs|s|m|l|xl|xxl)$/i.test(s)) return '';
+  if (!/[0-9]/.test(s)) return '';
+  // Bare number → treat as cm
+  if (/^[0-9]+(\.[0-9]+)?$/.test(s)) return s + ' cm';
+  if (/^[0-9]+(\.[0-9]+)?\s*cm$/i.test(s)) return s.replace(/\s+/g, ' ');
+  // Dimensions with x/× but missing unit
+  if (/(x|×|\*)/i.test(s) && !/(cm|mm)\b/i.test(s)) {
+    s = s.replace(/\s+$/, '') + ' cm';
+  } else if (!/(cm|mm|\bm\b|x|×|\*)/i.test(s)) {
+    return '';
+  }
+  return s.substring(0, 40);
 }
 
 function normalizeSuggestions_(raw) {
@@ -353,7 +375,7 @@ function normalizeSuggestions_(raw) {
     roomCategory: String(pick('roomCategory', 'room_category', '房間分類', 'room')),
     itemDescription: desc,
     quantity: pick('quantity', 'qty', '數量') || 1,
-    size: String(pick('size', '尺寸')),
+    size: sanitizeSizeCm_(pick('size', '尺寸')),
     weight: String(pick('weight', '重量')),
     estimatedValue: pick('estimatedValue', 'estimated_value', 'value', '預估價值') || 0
   };
