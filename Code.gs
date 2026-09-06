@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v24' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v25' });
 }
 
 function doPost(e) {
@@ -40,6 +40,7 @@ function doPost(e) {
       case 'inboxList': return jsonResponse(inboxList_());
       case 'inboxAnalyze': return jsonResponse(inboxAnalyze_(body.inboxId));
       case 'inboxDelete': return jsonResponse(inboxDelete_(body.inboxId, user.email));
+      case 'rebuildTorList': return jsonResponse(rebuildTorItemList_(user.email));
       default: return jsonResponse({ success: false, error: 'Unknown action' });
     }
   } catch (err) {
@@ -156,7 +157,7 @@ function analyzeImage_(base64Image, opts) {
     'Identify the main personal item in this photo for UK Transfer of Residence customs inventory. ' +
     'Return JSON only with keys: roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
     'Do NOT invent transport mode, box numbers, or bag locations. ' +
-    'itemDescription: required short English phrase e.g. "Used laptop computer". ' +
+    'itemDescription: required short English phrase for UK ToR / mover packing list, e.g. "Used laptop computer", "Used clothing", "Used books". Prefer "Used …" wording. ' +
     'size: ONLY numeric cm dimensions e.g. "20x15x5 cm" or "30x20 cm". Never use A4, Small, Medium, Large, or paper sizes. If unsure, leave size empty. ' +
     'roomCategory: 客廳|睡房|廚房|浴室|書房|其他. quantity: 1. estimatedValue: number GBP.';
 
@@ -470,6 +471,7 @@ function saveItem_(body, email) {
   ]);
   if (body.inboxId) markInboxDone_(body.inboxId);
   logActivity_(email, 'added', desc, (body.location || '') + ' · ' + status);
+  try { rebuildTorItemList_(email); } catch (e) {}
   return { success: true, photoLink: photoLink, timestamp: timestamp };
 }
 
@@ -737,6 +739,7 @@ function editItem_(body, email) {
         status,
         photoLink
       ]]);
+      try { rebuildTorItemList_(email); } catch (e) {}
       logActivity_(email, 'edited', body.itemDescription || String(data[i][4] || ''), body.location || '');
       return { success: true, photoLink: photoLink, timestamp: body.timestamp };
     }
@@ -757,11 +760,83 @@ function deleteItem_(timestamp, email) {
         if (match) DriveApp.getFileById(match[1]).setTrashed(true);
       } catch (e) {}
       sheet.deleteRow(i + 1);
+      try { rebuildTorItemList_(email); } catch (e) {}
       logActivity_(email, 'deleted', desc, String(data[i][2] || ''));
       return { success: true };
     }
   }
   throw new Error('Item not found');
+}
+
+
+const TOR_LIST_SHEET_NAME = 'Item List for TOR';
+
+function getTorListSheet_() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName(TOR_LIST_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(TOR_LIST_SHEET_NAME);
+  }
+  return sheet;
+}
+
+function formatTorItemName_(desc) {
+  var s = String(desc || '').trim();
+  if (!s) return '';
+  // Keep English mover/ToR style; ensure leading Used when clearly household goods and missing
+  if (!/^used\b/i.test(s) && !/^(new|brand new)\b/i.test(s)) {
+    // only auto-prefix short noun-like phrases
+    if (s.length <= 48 && !/[.!?]$/.test(s)) s = 'Used ' + s.charAt(0).toLowerCase() + s.slice(1);
+  }
+  // Capitalize first letter
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  return s.substring(0, 120);
+}
+
+function rebuildTorItemList_(email) {
+  const inv = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  const data = inv.getDataRange().getValues();
+  // Aggregate by normalized description
+  const map = {};
+  const order = [];
+  for (var i = 1; i < data.length; i++) {
+    var desc = String(data[i][4] || '').trim();
+    if (!desc) continue;
+    var qty = parseFloat(String(data[i][5] || '1').replace(/[^0-9.]/g, ''));
+    if (!qty || qty < 0) qty = 1;
+    var key = desc.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!map[key]) {
+      map[key] = { name: formatTorItemName_(desc), qty: 0 };
+      order.push(key);
+    } else {
+      // Prefer longer/more specific display name
+      var candidate = formatTorItemName_(desc);
+      if (candidate.length > map[key].name.length) map[key].name = candidate;
+    }
+    map[key].qty += qty;
+  }
+
+  const sheet = getTorListSheet_();
+  sheet.clear();
+  sheet.appendRow(['Item List for TOR', '', '']);
+  sheet.appendRow(['Item Number', 'Item', 'Number of Item']);
+  sheet.appendRow(['', 'Example: Books', '110 (approximately)']);
+
+  var n = 0;
+  for (var k = 0; k < order.length; k++) {
+    var row = map[order[k]];
+    n++;
+    var qtyOut = (Math.round(row.qty * 100) / 100);
+    // Whole numbers without decimals
+    if (Math.abs(qtyOut - Math.round(qtyOut)) < 0.001) qtyOut = String(Math.round(qtyOut));
+    else qtyOut = String(qtyOut);
+    sheet.appendRow([n, row.name, qtyOut]);
+  }
+
+  sheet.setFrozenRows(2);
+  try { sheet.autoResizeColumns(1, 3); } catch (e) {}
+  if (email) logActivity_(email, 'tor-list', 'Rebuilt Item List for TOR', n + ' line(s)');
+  return { success: true, count: n, sheet: TOR_LIST_SHEET_NAME };
 }
 
 function jsonResponse(obj) {
