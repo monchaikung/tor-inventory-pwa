@@ -259,9 +259,10 @@ async function apiCall(payload, retries = 2) {
 
   const hasImage = !!payload.image;
   const isAi = payload.action === 'analyze' || payload.action === 'inboxAnalyze';
+  const isBulk = payload.action === 'bulkUpdate';
   // Inbox AI: Drive fetch + Gemini can exceed 45s (esp. model fallback).
   const timeoutMs = isAi ? 120000
-    : (payload.action === 'inboxUpload' || hasImage) ? 90000 : 35000;
+    : (payload.action === 'inboxUpload' || hasImage || isBulk) ? 90000 : 35000;
   if (isAi) retries = 1;
 
   let lastErr;
