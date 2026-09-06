@@ -937,13 +937,15 @@ function sanitizeSizeCm(raw) {
   if (/\b(a[0-6]|b[0-6]|letter|legal|small|medium|large|xl|xxl|tiny|huge|big)\b/i.test(lower)) return '';
   if (/^(xs|s|m|l|xl|xxl)$/i.test(s)) return '';
   if (!/[0-9]/.test(s)) return '';
-  if (!/(cm|mm|\bm\b|x|×|\*)/i.test(s) && !/^[0-9]+(\.[0-9]+)?\s*(cm)?$/i.test(s)) {
-    if (/^[0-9]+(\.[0-9]+)?$/.test(s)) return `${s} cm`;
-    return '';
-  }
-  if (/[0-9]/.test(s) && /(x|×)/i.test(s) && !/(cm|mm)\b/i.test(s)) {
+  // Bare number → treat as cm
+  if (/^[0-9]+(\.[0-9]+)?$/.test(s)) return `${s} cm`;
+  if (/^[0-9]+(\.[0-9]+)?\s*cm$/i.test(s)) return s.replace(/\s+/g, ' ');
+  // Dimensions with x/× but missing unit
+  if (/(x|×|\*)/i.test(s) && !/(cm|mm)\b/i.test(s)) {
     return `${s.replace(/\s+$/, '')} cm`;
   }
+  // Must include a length unit or dimension separator
+  if (!/(cm|mm|\bm\b|x|×|\*)/i.test(s)) return '';
   return s.slice(0, 40);
 }
 

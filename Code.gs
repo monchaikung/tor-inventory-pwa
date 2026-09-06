@@ -340,16 +340,15 @@ function sanitizeSizeCm_(raw) {
   // Reject qualitative / paper sizes
   if (/\b(a[0-6]|b[0-6]|letter|legal|small|medium|large|xl|xxl|tiny|huge|big)\b/i.test(lower)) return '';
   if (/^(xs|s|m|l|xl|xxl)$/i.test(s)) return '';
-  // Must look like measurements with numbers (prefer cm)
   if (!/[0-9]/.test(s)) return '';
-  if (!/(cm|mm|m\b|x|×|\*)/i.test(s) && !/^[0-9]+(\.[0-9]+)?\s*(cm)?$/i.test(s)) {
-    // bare number like "20" — treat as cm
-    if (/^[0-9]+(\.[0-9]+)?$/.test(s)) return s + ' cm';
-    return '';
-  }
-  // Normalize: if has numbers + x but no unit, append cm
-  if (/[0-9]/.test(s) && /(x|×)/i.test(s) && !/(cm|mm)\b/i.test(s)) {
+  // Bare number → treat as cm
+  if (/^[0-9]+(\.[0-9]+)?$/.test(s)) return s + ' cm';
+  if (/^[0-9]+(\.[0-9]+)?\s*cm$/i.test(s)) return s.replace(/\s+/g, ' ');
+  // Dimensions with x/× but missing unit
+  if (/(x|×|\*)/i.test(s) && !/(cm|mm)\b/i.test(s)) {
     s = s.replace(/\s+$/, '') + ' cm';
+  } else if (!/(cm|mm|\bm\b|x|×|\*)/i.test(s)) {
+    return '';
   }
   return s.substring(0, 40);
 }
