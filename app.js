@@ -225,14 +225,19 @@ async function apiCall(payload, retries = 2) {
   const idToken = getIdToken();
   if (!idToken) throw new Error('Not signed in');
 
+  const hasImage = !!payload.image;
+  const timeoutMs = hasImage ? 90000 : 35000;
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const res = await fetch(GAS_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ ...payload, idToken }),
-        redirect: 'follow'
+        redirect: 'follow',
+        signal: ctrl.signal
       });
       const raw = await res.text();
       let data;
@@ -250,10 +255,18 @@ async function apiCall(payload, retries = 2) {
       return data;
     } catch (err) {
       lastErr = err;
-      const msg = String(err.message || err);
+      const msg = String(err.message || err.name || err);
+      const aborted = err.name === 'AbortError' || /aborted/i.test(msg);
+      if (aborted) {
+        throw new Error(hasImage
+          ? 'Save timed out. Try again on Wi‑Fi, or use a smaller photo. 儲存逾時，請再用 Wi‑Fi 試。'
+          : 'Request timed out. Check Wi‑Fi and try again. 請求逾時，請再試。');
+      }
       const network = /load failed|failed to fetch|networkerror|network request failed/i.test(msg);
       if (!network || attempt === retries) break;
       await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -497,6 +510,35 @@ function updateSaveButtonLabel() {
   $('cancelEditBtn')?.classList.toggle('hidden', !editingTimestamp);
 }
 
+async function shrinkBase64ForUpload(base64, maxChars = 450000) {
+  if (!base64 || base64.length <= maxChars) return base64;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width;
+      let h = img.height;
+      const maxDim = 1024;
+      if (w > maxDim || h > maxDim) {
+        if (w >= h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+        else { w = Math.round((w * maxDim) / h); h = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      let quality = 0.65;
+      let out = canvas.toDataURL('image/jpeg', quality).split(',')[1];
+      while (out.length > maxChars && quality > 0.4) {
+        quality -= 0.1;
+        out = canvas.toDataURL('image/jpeg', quality).split(',')[1];
+      }
+      resolve(out);
+    };
+    img.onerror = () => resolve(base64);
+    img.src = 'data:image/jpeg;base64,' + base64;
+  });
+}
+
 async function saveItem() {
   const transportLabel = transportMode === 'shipped' ? '寄箱' : '手提';
   const location = transportMode === 'shipped' ? $('boxNumber').value.trim() : selectedHandCarry;
@@ -521,14 +563,19 @@ async function saveItem() {
       status: selectedStatus
     };
     if (editingTimestamp) payload.timestamp = editingTimestamp;
-    if (currentImageBase64) payload.image = currentImageBase64;
+    if (currentImageBase64) {
+      $('saveBtn').textContent = 'Preparing photo…';
+      payload.image = await shrinkBase64ForUpload(currentImageBase64);
+      currentImageBase64 = payload.image;
+      $('saveBtn').textContent = editingTimestamp ? 'Updating…' : 'Uploading…';
+    }
 
     await apiCall(payload);
     showToast(editingTimestamp ? 'Item updated! 已更新' : 'Item saved!', 'success');
     clearForm();
     switchTab('items');
     loadAllItems();
-  } catch (err) { showToast(err.message, 'error'); }
+  } catch (err) { showToast(err.message || 'Save failed.', 'error'); }
   finally {
     $('saveBtn').disabled = false;
     updateSaveButtonLabel();

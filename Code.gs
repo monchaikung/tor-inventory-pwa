@@ -16,7 +16,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v15' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash', version: 'v16' });
 }
 
 function doPost(e) {
@@ -408,13 +408,29 @@ function saveItem_(body, email) {
 }
 
 function savePhoto_(base64Image, location, timestamp) {
+  if (!base64Image) throw new Error('Missing photo');
+  var raw = String(base64Image);
+  // Strip data-URL prefix if the client sent one by mistake
+  var comma = raw.indexOf(',');
+  if (raw.indexOf('data:') === 0 && comma !== -1) raw = raw.substring(comma + 1);
+  var bytes;
+  try {
+    bytes = Utilities.base64Decode(raw);
+  } catch (e) {
+    throw new Error('Invalid photo data');
+  }
+  if (!bytes || !bytes.length) throw new Error('Empty photo');
   const blob = Utilities.newBlob(
-    Utilities.base64Decode(base64Image),
+    bytes,
     'image/jpeg',
     sanitizeFilename_(location) + '_' + Date.now() + '.jpg'
   );
   const file = DriveApp.getFolderById(DRIVE_FOLDER_ID).createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {
+    // Folder may already allow link viewing; don't fail the whole save
+  }
   return file.getUrl();
 }
 
