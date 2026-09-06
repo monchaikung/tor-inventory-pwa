@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v21' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v22' });
 }
 
 function doPost(e) {
@@ -154,7 +154,8 @@ function analyzeImage_(base64Image, opts) {
 
   const prompt =
     'Identify the main personal item in this photo for UK Transfer of Residence customs inventory. ' +
-    'Return JSON only with keys: transportMode, location, roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
+    'Return JSON only with keys: transportMode, roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
+    'Do NOT invent box numbers or bag locations. ' +
     'transportMode: "shipped" or "handcarry". itemDescription: required short English phrase e.g. "Used laptop computer". ' +
     'roomCategory: 客廳|睡房|廚房|浴室|書房|其他. quantity: 1. estimatedValue: number GBP.';
 
@@ -162,7 +163,6 @@ function analyzeImage_(base64Image, opts) {
     type: 'OBJECT',
     properties: {
       transportMode: { type: 'STRING' },
-      location: { type: 'STRING' },
       roomCategory: { type: 'STRING' },
       itemDescription: { type: 'STRING' },
       quantity: { type: 'NUMBER' },
@@ -313,7 +313,7 @@ function regexExtractFields_(text) {
   }
   return {
     transportMode: grab('transportMode') || grab('transport_mode'),
-    location: grab('location'),
+    location: '',
     roomCategory: grab('roomCategory') || grab('room_category'),
     itemDescription: grab('itemDescription') || grab('item_description') || grab('description'),
     quantity: grabNum('quantity') || 1,
@@ -353,7 +353,8 @@ function normalizeSuggestions_(raw) {
 
   return {
     transportMode: transport,
-    location: String(pick('location', 'boxNumber', 'box_number', '存放位置', '箱號')),
+    // Box # is never AI-filled — upload note or PC editor only
+    location: '',
     roomCategory: String(pick('roomCategory', 'room_category', '房間分類', 'room')),
     itemDescription: desc,
     quantity: pick('quantity', 'qty', '數量') || 1,
