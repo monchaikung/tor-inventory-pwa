@@ -68,6 +68,7 @@ function bindEvents() {
   $('selectPhotosBtn').addEventListener('click', () => $('bulkPhotoInput').click());
   $('bulkPhotoInput').addEventListener('change', onPhotosSelected);
   $('clearQueueBtn').addEventListener('click', clearReviewQueue);
+  $('reviewBulkStatusBtn')?.addEventListener('click', openReviewBulkStatusPicker);
   $('runAiBtn').addEventListener('click', runAiOnQueue);
   $('rebuildTorListBtn')?.addEventListener('click', rebuildTorList);
   $('submitAllBtn').addEventListener('click', submitReadyItems);
@@ -763,17 +764,57 @@ function clearReviewQueue() {
   updateReviewToolbar();
 }
 
+function getReviewBulkStatusTargets() {
+  return reviewQueue.filter((q) =>
+    q.included &&
+    q.state !== 'done' &&
+    q.state !== 'submitting' &&
+    q.state !== 'analyzing'
+  );
+}
+
 function updateReviewToolbar() {
   const pending = reviewQueue.filter((q) => q.state === 'pending' || q.state === 'error').length;
   const ready = reviewQueue.filter((q) => q.state === 'ready' && q.included).length;
   const done = reviewQueue.filter((q) => q.state === 'done').length;
   const analyzing = reviewQueue.filter((q) => q.state === 'analyzing' || q.state === 'submitting').length;
+  const bulkTargets = getReviewBulkStatusTargets().length;
   $('reviewProgress').textContent = reviewQueue.length
     ? `${reviewQueue.length} photos · ${pending} need AI · ${ready} ready · ${done} submitted`
     : 'No photos yet';
+  const bulkBtn = $('reviewBulkStatusBtn');
+  if (bulkBtn) bulkBtn.disabled = reviewBusy || bulkTargets === 0;
   $('runAiBtn').disabled = reviewBusy || pending === 0;
   $('submitAllBtn').disabled = reviewBusy || ready === 0;
   if (analyzing) $('reviewProgress').textContent += ` · working…`;
+}
+
+function openReviewBulkStatusPicker() {
+  if (reviewBusy) {
+    showToast('Busy — wait for AI/submit to finish.', 'error');
+    return;
+  }
+  const targets = getReviewBulkStatusTargets();
+  if (!targets.length) {
+    showToast('勾選 Include 嘅卡片先 Select included cards first', 'error');
+    return;
+  }
+  openActionSheet(
+    STATUS_OPTIONS.map((s) => ({ label: s.label, value: s.value })),
+    (value) => {
+      if (!value) return;
+      applyReviewBulkStatus(value);
+    }
+  );
+}
+
+function applyReviewBulkStatus(status) {
+  const targets = getReviewBulkStatusTargets();
+  if (!targets.length) return;
+  targets.forEach((item) => { item.itemStatus = status; });
+  renderReviewQueue();
+  updateReviewToolbar();
+  showToast(`Status → ${status} · ${targets.length} card(s)`, 'success');
 }
 
 function renderReviewQueue() {
