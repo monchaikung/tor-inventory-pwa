@@ -214,6 +214,20 @@ html, body {
   opacity: 0.9;
 }
 
+.ios-btn-primary:disabled,
+.ios-btn-primary.is-muted {
+  background: #A8C7FA;
+  color: rgba(255, 255, 255, 0.92);
+  cursor: not-allowed;
+  transform: none;
+  opacity: 1;
+}
+
+.ios-btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .ios-btn-secondary {
   flex: 1;
   height: 50px;
