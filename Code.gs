@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v22' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v23' });
 }
 
 function doPost(e) {
@@ -154,15 +154,14 @@ function analyzeImage_(base64Image, opts) {
 
   const prompt =
     'Identify the main personal item in this photo for UK Transfer of Residence customs inventory. ' +
-    'Return JSON only with keys: transportMode, roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
-    'Do NOT invent box numbers or bag locations. ' +
-    'transportMode: "shipped" or "handcarry". itemDescription: required short English phrase e.g. "Used laptop computer". ' +
+    'Return JSON only with keys: roomCategory, itemDescription, quantity, size, weight, estimatedValue. ' +
+    'Do NOT invent transport mode, box numbers, or bag locations. ' +
+    'itemDescription: required short English phrase e.g. "Used laptop computer". ' +
     'roomCategory: 客廳|睡房|廚房|浴室|書房|其他. quantity: 1. estimatedValue: number GBP.';
 
   const schema = {
     type: 'OBJECT',
     properties: {
-      transportMode: { type: 'STRING' },
       roomCategory: { type: 'STRING' },
       itemDescription: { type: 'STRING' },
       quantity: { type: 'NUMBER' },
@@ -170,7 +169,7 @@ function analyzeImage_(base64Image, opts) {
       weight: { type: 'STRING' },
       estimatedValue: { type: 'NUMBER' }
     },
-    required: ['transportMode', 'itemDescription']
+    required: ['itemDescription']
   };
 
   const payload = {
@@ -345,15 +344,11 @@ function normalizeSuggestions_(raw) {
     return '';
   }
 
-  var transport = String(pick('transportMode', 'transport_mode', '運送方式', 'mode')).toLowerCase();
-  if (transport.indexOf('hand') !== -1 || transport.indexOf('手提') !== -1) transport = 'handcarry';
-  else transport = 'shipped';
-
+  // Transport + Box # never from AI — upload bulk fields or PC editor only
   var desc = String(pick('itemDescription', 'item_description', 'description', '物品描述', 'desc', 'item', 'name', 'title', 'product', 'object'));
 
   return {
-    transportMode: transport,
-    // Box # is never AI-filled — upload note or PC editor only
+    transportMode: '',
     location: '',
     roomCategory: String(pick('roomCategory', 'room_category', '房間分類', 'room')),
     itemDescription: desc,
@@ -496,10 +491,17 @@ function getInboxSheet_() {
   var sheet = ss.getSheetByName(INBOX_SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(INBOX_SHEET_NAME);
-    sheet.appendRow(['InboxId', 'UploadedAt', 'User', 'PhotoLink', 'FileId', 'FileName', 'CaptureTime', 'Note', 'Status']);
+    sheet.appendRow(['InboxId', 'UploadedAt', 'User', 'PhotoLink', 'FileId', 'FileName', 'CaptureTime', 'Note', 'Status', 'TransportMode', 'Location']);
     sheet.setFrozenRows(1);
+  } else {
+    ensureInboxHeaders_(sheet);
   }
   return sheet;
+}
+
+function ensureInboxHeaders_(sheet) {
+  if (sheet.getLastColumn() < 10) sheet.getRange(1, 10).setValue('TransportMode');
+  if (sheet.getLastColumn() < 11) sheet.getRange(1, 11).setValue('Location');
 }
 
 function inboxUpload_(body, email) {
@@ -509,6 +511,10 @@ function inboxUpload_(body, email) {
   const captureTime = body.captureTime ? String(body.captureTime) : uploadedAt;
   const fileName = String(body.fileName || 'photo.jpg').substring(0, 120);
   const note = String(body.note || '').substring(0, 200);
+  var transportMode = String(body.transportMode || '寄箱');
+  if (transportMode.indexOf('手') !== -1 || /hand/i.test(transportMode)) transportMode = '手提';
+  else transportMode = '寄箱';
+  const location = String(body.location || '').substring(0, 80);
   const saved = savePhotoToFolder_(body.image, 'inbox', uploadedAt, getInboxFolder_());
   getInboxSheet_().appendRow([
     inboxId,
@@ -519,7 +525,9 @@ function inboxUpload_(body, email) {
     fileName,
     captureTime,
     note,
-    'pending'
+    'pending',
+    transportMode,
+    location
   ]);
   logActivity_(email, 'inbox', 'Uploaded for later', fileName + ' · ' + captureTime);
   return {
@@ -552,7 +560,9 @@ function inboxList_() {
       fileName: String(data[i][5] || ''),
       captureTime: String(data[i][6] || data[i][1] || ''),
       note: String(data[i][7] || ''),
-      status: status
+      status: status,
+      transportMode: String(data[i][9] || '寄箱'),
+      location: String(data[i][10] || '')
     });
   }
   items.sort(function(a, b) {

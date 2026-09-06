@@ -27,6 +27,7 @@ const STATUS_CLASS = {
 let allItems = [];
 let reviewQueue = [];
 let uploadQueue = [];
+let uploadTransportMode = '寄箱';
 let reviewBusy = false;
 let uploadBusy = false;
 let editingTimestamp = null;
@@ -74,6 +75,7 @@ function bindEvents() {
   $('uploadPhotoInput')?.addEventListener('change', onUploadPhotosSelected);
   $('uploadClearBtn')?.addEventListener('click', clearUploadQueue);
   $('uploadSendBtn')?.addEventListener('click', sendUploadQueue);
+  initUploadBulkFields();
 
   $('saveBtn').addEventListener('click', saveEditItem);
   $('cancelEditBtn').addEventListener('click', cancelEdit);
@@ -565,6 +567,44 @@ function renderUploadQueue() {
   `).join('');
 }
 
+
+function initUploadBulkFields() {
+  const bag = $('uploadBagSelect');
+  if (bag && !bag.dataset.ready) {
+    bag.innerHTML = '<option value="">Select bag…</option>' +
+      HAND_CARRY_OPTIONS.map((o) => `<option value="${esc(o.label)}">${o.icon} ${esc(o.label)}</option>`).join('');
+    bag.dataset.ready = '1';
+  }
+  document.querySelectorAll('#uploadTransportSeg [data-upload-transport]').forEach((btn) => {
+    btn.addEventListener('click', () => setUploadTransport(btn.dataset.uploadTransport));
+  });
+  setUploadTransport(uploadTransportMode);
+}
+
+function setUploadTransport(mode) {
+  uploadTransportMode = mode === '手提' ? '手提' : '寄箱';
+  document.querySelectorAll('#uploadTransportSeg [data-upload-transport]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.uploadTransport === uploadTransportMode);
+  });
+  const shipped = uploadTransportMode === '寄箱';
+  $('uploadBoxRow')?.classList.toggle('hidden', !shipped);
+  $('uploadBagRow')?.classList.toggle('hidden', shipped);
+}
+
+function getUploadBulkLocation() {
+  if (uploadTransportMode === '手提') {
+    return ($('uploadBagSelect')?.value || '').trim();
+  }
+  return ($('uploadBoxNumber')?.value || '').trim();
+}
+
+function clearUploadBulkFields() {
+  if ($('uploadNote')) $('uploadNote').value = '';
+  if ($('uploadBoxNumber')) $('uploadBoxNumber').value = '';
+  if ($('uploadBagSelect')) $('uploadBagSelect').value = '';
+  setUploadTransport('寄箱');
+}
+
 async function sendUploadQueue() {
   if (uploadBusy) {
     showToast('Already uploading…', 'error');
@@ -575,10 +615,21 @@ async function sendUploadQueue() {
     return;
   }
 
+  const location = getUploadBulkLocation();
+  if (!location) {
+    const need = uploadTransportMode === '手提' ? 'Bag / 手提袋' : 'Box # / 箱號';
+    showToast(`上載前請先填 ${need}（套用全部相片）`, 'error', 4000);
+    const el = uploadTransportMode === '手提' ? $('uploadBagSelect') : $('uploadBoxNumber');
+    el?.classList.add('field-warn');
+    el?.focus();
+    return;
+  }
+
   uploadBusy = true;
   updateUploadToolbar();
   renderUploadQueue();
   const note = ($('uploadNote')?.value || '').trim();
+  const transportMode = uploadTransportMode;
   let ok = 0;
   let fail = 0;
   const total = uploadQueue.length;
@@ -603,7 +654,9 @@ async function sendUploadQueue() {
         image: item.imageBase64,
         fileName: item.fileName,
         captureTime: item.captureTime,
-        note
+        note,
+        transportMode,
+        location
       });
       ok++;
       item.state = 'done';
@@ -621,7 +674,7 @@ async function sendUploadQueue() {
   uploadBusy = false;
   if (fail === 0) {
     uploadQueue = [];
-    if ($('uploadNote')) $('uploadNote').value = '';
+    clearUploadBulkFields();
     renderUploadQueue();
     updateUploadToolbar();
     showToast(`Done · ${ok} photo(s) 待處理`, 'success');
@@ -653,7 +706,8 @@ async function loadInboxIntoReview() {
       captureTime: it.captureTime || it.uploadedAt || new Date().toISOString(),
       note: it.note || '',
       state: 'pending',
-      location: it.note || ''
+      transportMode: (it.transportMode === '手提' ? '手提' : '寄箱'),
+      location: it.location || it.note || ''
     }));
     sortByCaptureTime(reviewQueue);
     renderReviewQueue();
@@ -770,7 +824,7 @@ function reviewCardHtml(item) {
         </div>
         <div class="review-field-row review-loc-shipped" style="${item.transportMode === '手提' ? 'display:none' : ''}">
           <label>Box # <span class="field-required">必填</span></label>
-          <input type="text" data-field="location" value="${esc(item.transportMode === '寄箱' ? item.location : '')}" placeholder="上載 note 或喺度填，e.g. 1" ${disabled ? 'disabled' : ''} class="${item._highlightLocation && item.transportMode === '寄箱' && !item.location ? 'field-warn' : ''}">
+          <input type="text" data-field="location" value="${esc(item.transportMode === '寄箱' ? item.location : '')}" placeholder="上載時 bulk 填，或喺度改 e.g. 1" ${disabled ? 'disabled' : ''} class="${item._highlightLocation && item.transportMode === '寄箱' && !item.location ? 'field-warn' : ''}">
         </div>
         <div class="review-field-row review-loc-hand" style="${item.transportMode === '手提' ? '' : 'display:none'}">
           <label>Bag <span class="field-required">必填</span></label>
@@ -878,7 +932,7 @@ function pickAiField(data, keys) {
 function applySuggestionsToItem(item, data) {
   if (!data || typeof data !== 'object') return false;
   const transportRaw = String(pickAiField(data, ['transportMode', 'transport_mode', '運送方式', 'mode'])).toLowerCase();
-  // Box # / bag location is NEVER filled by AI — only upload note or manual PC edit.
+  // Transport + Box # / bag are NEVER filled by AI — upload bulk or manual PC edit only.
   const roomCategory = String(pickAiField(data, ['roomCategory', 'room_category', '房間分類', 'room']));
   const itemDescription = String(pickAiField(data, ['itemDescription', 'item_description', 'description', '物品描述', 'desc', 'item', 'name', 'title']));
   const quantity = pickAiField(data, ['quantity', 'qty', '數量']) || '1';
@@ -886,11 +940,8 @@ function applySuggestionsToItem(item, data) {
   const weight = String(pickAiField(data, ['weight', '重量']));
   const estimatedValue = pickAiField(data, ['estimatedValue', 'estimated_value', 'value', '預估價值']);
 
-  if (transportRaw.includes('hand') || transportRaw.includes('手提')) {
-    item.transportMode = '手提';
-  } else if (transportRaw) {
-    item.transportMode = '寄箱';
-  }
+  // Transport + Box # are NEVER filled by AI — upload bulk fields or manual PC edit only.
+  void transportRaw;
   if (roomCategory) item.roomCategory = roomCategory;
   if (itemDescription) item.itemDescription = itemDescription;
   if (quantity) item.quantity = String(quantity);
@@ -962,7 +1013,7 @@ async function submitReadyItems() {
     }
     if (!item.location.trim()) {
       const need = item.transportMode === '手提' ? 'Bag / 手提袋' : 'Box # / 箱號';
-      showToast(`請先填 ${need}（上載 note 或喺度改）：${item.fileName}`, 'error', 4500);
+      showToast(`請先填 ${need}（上載時 bulk 填，或喺度改）：${item.fileName}`, 'error', 4500);
       // Expand card + highlight empty location field
       item._highlightLocation = true;
       renderReviewQueue();
