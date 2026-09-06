@@ -417,15 +417,49 @@ function emptyReviewItem(partial) {
   };
 }
 
+function isProbablyImageFile(file) {
+  const type = String(file.type || '').toLowerCase();
+  if (type.startsWith('image/')) return true;
+  if (/\.(jpe?g|png|gif|webp|heic|heif|bmp|tif{1,2})$/i.test(file.name || '')) return true;
+  // iOS photo picker sometimes omits type/extension
+  return !type && file.size > 0;
+}
+
+function isHeicLike(file) {
+  const type = String(file.type || '').toLowerCase();
+  return type.includes('heic') || type.includes('heif') || /\.hei[cf]$/i.test(file.name || '');
+}
+
 async function onUploadPhotosSelected(e) {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
   if (!files.length) return;
+  if (uploadBusy) {
+    showToast('Upload in progress — wait, then add more.', 'error');
+    return;
+  }
+
+  let added = 0;
+  let skipped = 0;
   showToast(`Preparing ${files.length} photo(s)…`, 'success');
-  for (const file of files) {
-    if (!file.type.startsWith('image/') && !/\.heic$/i.test(file.name)) continue;
+  updateUploadToolbar({ preparing: true, preparingTotal: files.length, preparingDone: 0 });
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    updateUploadToolbar({ preparing: true, preparingTotal: files.length, preparingDone: i });
+    if (!isProbablyImageFile(file)) {
+      skipped++;
+      continue;
+    }
     if (file.size > 20 * 1024 * 1024) {
-      showToast(`Skipped ${file.name} (too large)`, 'error');
+      skipped++;
+      showToast(`Skipped ${file.name || 'photo'} (too large)`, 'error');
+      continue;
+    }
+    if (isHeicLike(file)) {
+      // Canvas cannot decode HEIC in most mobile browsers
+      skipped++;
+      showToast('HEIC 唔支援 — 請用「最相容」/JPEG 匯出再試', 'error');
       continue;
     }
     try {
@@ -434,19 +468,25 @@ async function onUploadPhotosSelected(e) {
       const base64 = await shrinkBase64ForUpload(dataUrl.split(',')[1]);
       uploadQueue.push({
         id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        fileName: file.name,
+        fileName: file.name || `photo_${i + 1}.jpg`,
         previewUrl: 'data:image/jpeg;base64,' + base64,
         imageBase64: base64,
         captureTime,
-        state: 'queued'
+        state: 'queued',
+        error: ''
       });
+      added++;
     } catch (err) {
-      showToast(`${file.name}: ${err.message}`, 'error');
+      skipped++;
+      showToast(`${file.name || 'photo'}: ${err.message}`, 'error');
     }
   }
+
   sortByCaptureTime(uploadQueue);
   renderUploadQueue();
   updateUploadToolbar();
+  if (added) showToast(`Ready ${added} photo(s)${skipped ? ` · skipped ${skipped}` : ''} — tap Upload`, 'success');
+  else showToast(skipped ? 'No photos ready — try JPEG / 「最相容」' : 'No photos selected', 'error');
 }
 
 function clearUploadQueue() {
@@ -456,14 +496,37 @@ function clearUploadQueue() {
   updateUploadToolbar();
 }
 
-function updateUploadToolbar() {
+function updateUploadToolbar(opts = {}) {
   const el = $('uploadProgress');
   const btn = $('uploadSendBtn');
   if (!el || !btn) return;
+
+  if (opts.preparing) {
+    el.textContent = `Preparing ${opts.preparingDone || 0}/${opts.preparingTotal || 0}…`;
+    btn.textContent = 'Preparing…';
+    btn.disabled = true;
+    return;
+  }
+
+  if (uploadBusy) {
+    const done = uploadQueue.filter((q) => q.state === 'done').length;
+    const total = uploadQueue.length;
+    const current = uploadQueue.find((q) => q.state === 'uploading');
+    el.textContent = current
+      ? `Uploading ${done + 1}/${total} · ${current.fileName}`
+      : `Uploading… ${done}/${total}`;
+    btn.textContent = `Uploading ${Math.min(done + 1, total)}/${total}…`;
+    btn.disabled = true;
+    return;
+  }
+
   el.textContent = uploadQueue.length
-    ? `${uploadQueue.length} photo(s) · sorted by capture time · status 待處理`
-    : 'No photos selected';
-  btn.disabled = uploadBusy || uploadQueue.length === 0;
+    ? `${uploadQueue.length} ready · sorted by capture time · tap Upload as 待處理`
+    : 'No photos selected — tap Select photos first';
+  btn.textContent = uploadQueue.length ? 'Upload as 待處理' : 'Select photos first';
+  // Keep clickable so we can toast a reason instead of silent no-op
+  btn.disabled = false;
+  btn.classList.toggle('is-muted', uploadQueue.length === 0);
 }
 
 function renderUploadQueue() {
@@ -473,10 +536,16 @@ function renderUploadQueue() {
     container.innerHTML = '<div class="empty-state">Select photos on your phone.</div>';
     return;
   }
+  const stateLabel = {
+    queued: '待處理',
+    uploading: '上載中…',
+    done: '已上載',
+    error: '失敗'
+  };
   container.innerHTML = uploadQueue.map((item, idx) => `
     <article class="review-card">
       <div class="review-card-top">
-        <span class="review-state review-state-pending">#${idx + 1} · 待處理</span>
+        <span class="review-state review-state-${item.state === 'error' ? 'error' : item.state === 'done' ? 'done' : item.state === 'uploading' ? 'analyzing' : 'pending'}">#${idx + 1} · ${stateLabel[item.state] || '待處理'}</span>
         <span class="review-capture">${esc(formatCaptureTime(item.captureTime))}</span>
       </div>
       <div class="review-card-body">
@@ -484,6 +553,7 @@ function renderUploadQueue() {
         <div class="review-fields">
           <p class="review-filename">${esc(item.fileName)}</p>
           <p class="review-filename">Taken: ${esc(formatCaptureTime(item.captureTime))}</p>
+          ${item.error ? `<p class="review-error">${esc(item.error)}</p>` : ''}
         </div>
       </div>
     </article>
@@ -491,14 +561,37 @@ function renderUploadQueue() {
 }
 
 async function sendUploadQueue() {
-  if (uploadBusy || !uploadQueue.length) return;
+  if (uploadBusy) {
+    showToast('Already uploading…', 'error');
+    return;
+  }
+  if (!uploadQueue.length) {
+    showToast('請先撳 Select photos 揀相', 'error');
+    return;
+  }
+
   uploadBusy = true;
   updateUploadToolbar();
+  renderUploadQueue();
   const note = ($('uploadNote')?.value || '').trim();
   let ok = 0;
   let fail = 0;
-  showToast(`Uploading ${uploadQueue.length} as 待處理…`, 'success');
+  const total = uploadQueue.length;
+  showToast(`Uploading 1/${total} as 待處理…`, 'success');
+
   for (const item of uploadQueue) {
+    if (!item.imageBase64) {
+      fail++;
+      item.state = 'error';
+      item.error = 'Missing photo data';
+      renderUploadQueue();
+      updateUploadToolbar();
+      continue;
+    }
+    item.state = 'uploading';
+    item.error = '';
+    renderUploadQueue();
+    updateUploadToolbar();
     try {
       await apiCall({
         action: 'inboxUpload',
@@ -509,25 +602,29 @@ async function sendUploadQueue() {
       });
       ok++;
       item.state = 'done';
+      showToast(`Uploaded ${ok}/${total} · 待處理`, 'success');
     } catch (err) {
       fail++;
       item.state = 'error';
-      showToast(`${item.fileName}: ${err.message}`, 'error');
+      item.error = err.message || 'Upload failed';
+      showToast(`${item.fileName}: ${item.error}`, 'error');
     }
+    renderUploadQueue();
     updateUploadToolbar();
   }
+
   uploadBusy = false;
   if (fail === 0) {
     uploadQueue = [];
     if ($('uploadNote')) $('uploadNote').value = '';
     renderUploadQueue();
     updateUploadToolbar();
-    showToast(`Uploaded ${ok} photo(s) · 待處理`, 'success');
+    showToast(`Done · ${ok} photo(s) 待處理`, 'success');
   } else {
     uploadQueue = uploadQueue.filter((q) => q.state !== 'done');
     renderUploadQueue();
     updateUploadToolbar();
-    showToast(`Uploaded ${ok}, failed ${fail}`, 'error');
+    showToast(`Uploaded ${ok}, failed ${fail} — tap Upload to retry failed`, 'error');
   }
 }
 
@@ -1424,7 +1521,7 @@ function switchTab(tab) {
   if (tab === 'dashboard') { $('screenDashboard').classList.add('active'); renderDashboard(); loadActivityLog(); }
 }
 
-function showToast(msg, type = 'success') {
+function showToast(msg, type = 'success', ms = 2800) {
   const t = $('toast');
   if (!t) return;
   if (showToast._timer) clearTimeout(showToast._timer);
@@ -1433,7 +1530,7 @@ function showToast(msg, type = 'success') {
   showToast._timer = setTimeout(() => {
     t.classList.remove('show');
     showToast._timer = null;
-  }, 2500);
+  }, ms);
 }
 
 function esc(str) {
