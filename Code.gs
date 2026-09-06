@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v20' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v21' });
 }
 
 function doPost(e) {
@@ -186,12 +186,13 @@ function analyzeImage_(base64Image, opts) {
     }
   };
 
-  // Prefer one fast model; one fallback only (long chains cause client timeouts).
+  // No gemini-2.5-* (retired for new users → 404). Prefer 3.5-lite, then 3.6-flash.
   const models = opts.fast
-    ? ['gemini-3.5-flash-lite', 'gemini-2.5-flash']
-    : ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash'];
+    ? ['gemini-3.5-flash-lite', 'gemini-3.6-flash']
+    : ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.6-flash'];
   let resp = null;
   let lastError = '';
+  let lastCode = 0;
 
   for (var m = 0; m < models.length; m++) {
     const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[m] + ':generateContent?key=' + apiKey;
@@ -201,24 +202,26 @@ function analyzeImage_(base64Image, opts) {
       payload: JSON.stringify(payload),
       muteHttpExceptions: true
     });
-    const code = resp.getResponseCode();
-    if (code === 200) break;
+    lastCode = resp.getResponseCode();
+    if (lastCode === 200) break;
     lastError = resp.getContentText();
-    // 404/400 = bad model or request — try next. 429/503 = busy — try next once.
-    const tryNext = code === 404 || code === 400 || code === 503 || code === 429 || code === 500;
+    // 404/400 = bad/retired model or request — try next. 429/503 = busy — try next once.
+    const tryNext = lastCode === 404 || lastCode === 400 || lastCode === 503 || lastCode === 429 || lastCode === 500;
     if (!tryNext) break;
     if (m < models.length - 1) Utilities.sleep(250);
   }
 
-  if (!resp || resp.getResponseCode() !== 200) {
-    const code = resp ? resp.getResponseCode() : 0;
-    if (code === 503) {
+  if (!resp || lastCode !== 200) {
+    if (lastCode === 503) {
       throw new Error('AI is busy right now. Please wait a few seconds and try again.');
     }
-    if (code === 429) {
+    if (lastCode === 429) {
       throw new Error('AI rate limit reached. Wait 30 seconds and try again. AI 請求太密，請稍等再試。');
     }
-    throw new Error('Gemini API error: ' + (lastError || ('HTTP ' + code)));
+    if (lastCode === 404) {
+      throw new Error('AI model unavailable. Redeploy latest Code.gs. AI 模型唔可用，請更新 Code.gs。');
+    }
+    throw new Error(formatGeminiError_(lastError, lastCode));
   }
 
   const result = JSON.parse(resp.getContentText());
@@ -239,6 +242,25 @@ function analyzeImage_(base64Image, opts) {
   }
 
   return { success: true, suggestions: suggestions };
+}
+
+
+function formatGeminiError_(raw, code) {
+  try {
+    var parsed = JSON.parse(raw);
+    var msg = parsed && parsed.error && parsed.error.message;
+    if (msg) {
+      msg = String(msg);
+      if (/no longer available|NOT_FOUND|not found/i.test(msg)) {
+        return 'AI model unavailable. Update Code.gs model list. AI 模型已停用。';
+      }
+      if (msg.length > 160) msg = msg.substring(0, 157) + '…';
+      return 'Gemini API error: ' + msg;
+    }
+  } catch (e) {}
+  var s = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (s.length > 160) s = s.substring(0, 157) + '…';
+  return 'Gemini API error: ' + (s || ('HTTP ' + code));
 }
 
 function extractGeminiText_(result) {
