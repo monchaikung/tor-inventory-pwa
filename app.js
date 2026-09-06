@@ -848,7 +848,7 @@ function reviewCardHtml(item) {
           </div>
           <div class="review-field-row">
             <label>Size</label>
-            <input type="text" data-field="size" value="${esc(item.size)}" ${disabled ? 'disabled' : ''}>
+            <input type="text" data-field="size" value="${esc(item.size)}" placeholder="e.g. 20x15x5 cm" ${disabled ? 'disabled' : ''}>
           </div>
           <div class="review-field-row">
             <label>Weight</label>
@@ -929,6 +929,24 @@ function pickAiField(data, keys) {
   return '';
 }
 
+
+function sanitizeSizeCm(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const lower = s.toLowerCase();
+  if (/\b(a[0-6]|b[0-6]|letter|legal|small|medium|large|xl|xxl|tiny|huge|big)\b/i.test(lower)) return '';
+  if (/^(xs|s|m|l|xl|xxl)$/i.test(s)) return '';
+  if (!/[0-9]/.test(s)) return '';
+  if (!/(cm|mm|\bm\b|x|×|\*)/i.test(s) && !/^[0-9]+(\.[0-9]+)?\s*(cm)?$/i.test(s)) {
+    if (/^[0-9]+(\.[0-9]+)?$/.test(s)) return `${s} cm`;
+    return '';
+  }
+  if (/[0-9]/.test(s) && /(x|×)/i.test(s) && !/(cm|mm)\b/i.test(s)) {
+    return `${s.replace(/\s+$/, '')} cm`;
+  }
+  return s.slice(0, 40);
+}
+
 function applySuggestionsToItem(item, data) {
   if (!data || typeof data !== 'object') return false;
   const transportRaw = String(pickAiField(data, ['transportMode', 'transport_mode', '運送方式', 'mode'])).toLowerCase();
@@ -936,7 +954,7 @@ function applySuggestionsToItem(item, data) {
   const roomCategory = String(pickAiField(data, ['roomCategory', 'room_category', '房間分類', 'room']));
   const itemDescription = String(pickAiField(data, ['itemDescription', 'item_description', 'description', '物品描述', 'desc', 'item', 'name', 'title']));
   const quantity = pickAiField(data, ['quantity', 'qty', '數量']) || '1';
-  const size = String(pickAiField(data, ['size', '尺寸']));
+  const size = sanitizeSizeCm(pickAiField(data, ['size', '尺寸']));
   const weight = String(pickAiField(data, ['weight', '重量']));
   const estimatedValue = pickAiField(data, ['estimatedValue', 'estimated_value', 'value', '預估價值']);
 
