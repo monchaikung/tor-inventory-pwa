@@ -17,7 +17,6 @@
 </head>
 <body>
 
-  <!-- Login Screen -->
   <div id="loginScreen" class="login-screen">
     <div class="login-icon">📦</div>
     <h1 class="login-title">Log</h1>
@@ -26,7 +25,6 @@
     <p id="loginError" class="hidden" style="color:#FF3B30;margin-top:16px;font-size:14px;"></p>
   </div>
 
-  <!-- Main App -->
   <div id="mainApp" class="hidden">
     <div id="installBanner" class="install-banner hidden">
       <div class="install-banner-content">
@@ -36,43 +34,48 @@
       </div>
       <button type="button" id="dismissInstallBanner" class="install-dismiss" aria-label="Dismiss">×</button>
     </div>
-    <div class="app-container">
+    <div class="app-container desktop-wide">
 
-      <!-- Nav Bar -->
       <header class="ios-navbar">
         <div class="ios-nav-row">
-          <h1 class="ios-large-title" id="navTitle">Log Item</h1>
+          <h1 class="ios-large-title" id="navTitle">Review</h1>
           <button class="ios-text-btn" id="signOutBtn">Sign out</button>
         </div>
       </header>
 
-      <!-- LOG SCREEN -->
-      <div id="screenLog" class="screen active">
+      <!-- REVIEW: select → AI → check → submit -->
+      <div id="screenReview" class="screen active">
+        <p class="review-hint">Select one or many photos → Run AI → check fields → Submit to Sheet</p>
         <div class="ios-btn-row">
-          <button class="ios-btn-secondary" id="takePhotoBtn">📷 拍照</button>
-          <button class="ios-btn-secondary" id="importPhotoBtn">🖼 匯入照片</button>
+          <button class="ios-btn-secondary" id="selectPhotosBtn">🖼 Select photos</button>
+          <button class="ios-btn-secondary" id="clearQueueBtn">Clear queue</button>
         </div>
-        <input type="file" id="cameraInput" accept="image/*" capture="environment" class="hidden">
-        <input type="file" id="importInput" accept="image/*" class="hidden">
+        <input type="file" id="bulkPhotoInput" accept="image/*" multiple class="hidden">
 
-        <div id="photoPreviewWrap" class="photo-preview-wrap hidden">
-          <img id="photoPreview" class="photo-preview" alt="Preview">
-          <div id="photoLoading" class="photo-loading hidden">
-            <div class="photo-loading-inner">
-              <div class="spinner"></div>
-              <p id="photoStatusText" class="photo-status-text">Preparing photo…</p>
-            </div>
+        <div class="review-toolbar">
+          <span id="reviewProgress" class="review-progress">No photos yet</span>
+          <div class="review-toolbar-actions">
+            <button class="ios-btn-secondary" id="runAiBtn" disabled>Run AI</button>
+            <button class="ios-btn-primary" id="submitAllBtn" disabled>Submit to Sheet</button>
           </div>
-          <button class="change-photo-btn" id="changePhotoBtn">Change photo</button>
         </div>
 
+        <div id="reviewQueue" class="review-queue">
+          <div class="empty-state">Select photos to start.</div>
+        </div>
+      </div>
+
+      <!-- EDIT existing item -->
+      <div id="screenEdit" class="screen">
+        <div id="editPhotoWrap" class="photo-preview-wrap hidden">
+          <img id="editPhotoPreview" class="photo-preview" alt="Preview">
+        </div>
         <p class="ios-section-header">Transport 運送方式</p>
         <div class="ios-segmented">
           <button class="ios-segment active" data-mode="shipped" id="modeShipped">寄箱 Shipped</button>
           <button class="ios-segment" data-mode="handcarry" id="modeHandCarry">手提 Hand Carry</button>
         </div>
-
-        <p class="ios-section-header">Item Details 物品資料</p>
+        <p class="ios-section-header">Item Details</p>
         <div class="ios-group">
           <div class="ios-row" id="locationRowShipped">
             <span class="ios-row-label">箱號 Box</span>
@@ -87,7 +90,7 @@
             <input class="ios-input" id="roomCategory" type="text" placeholder="客廳, 睡房...">
           </div>
           <div class="ios-row" style="flex-direction:column;align-items:stretch;">
-            <span class="ios-row-label" style="margin-bottom:8px;">物品描述 (ToR1)</span>
+            <span class="ios-row-label" style="margin-bottom:8px;">物品描述</span>
             <textarea class="ios-textarea" id="itemDescription" placeholder="e.g. Used clothing"></textarea>
           </div>
           <div class="ios-row">
@@ -111,12 +114,10 @@
             <button class="ios-text-btn" id="statusPickerBtn" style="padding:0;">待整理 ›</button>
           </div>
         </div>
-
-        <button class="ios-btn-primary" id="saveBtn">Save to Google Drive</button>
-        <button type="button" class="ios-btn-secondary hidden" id="cancelEditBtn" style="margin-top:10px;">Cancel edit 取消編輯</button>
+        <button class="ios-btn-primary" id="saveBtn">Update item</button>
+        <button type="button" class="ios-btn-secondary" id="cancelEditBtn" style="margin-top:10px;">Cancel</button>
       </div>
 
-      <!-- ITEMS SCREEN -->
       <div id="screenItems" class="screen">
         <div class="ios-search-wrap">
           <span class="ios-search-icon">🔍</span>
@@ -138,17 +139,15 @@
           <button class="ios-chip" data-status="已寄出">已寄出</button>
         </div>
         <p class="result-count" id="resultCount"></p>
-        <p class="swipe-hint">← 左滑：改狀態（綠） · 右滑：Edit / Delete →</p>
+        <p class="swipe-hint">← 左滑：改狀態 · 右滑：Edit / Delete →</p>
         <div id="itemList"></div>
       </div>
 
-      <!-- BOXES SCREEN -->
       <div id="screenBoxes" class="screen">
         <div class="ios-progress-bar" id="progressBarBoxes">Loading…</div>
         <div id="boxSummary"></div>
       </div>
 
-      <!-- DASHBOARD SCREEN -->
       <div id="screenDashboard" class="screen">
         <div class="dash-grid" id="dashStats"></div>
         <div class="ios-card dash-section">
@@ -157,20 +156,16 @@
         </div>
         <div class="ios-card dash-section">
           <p class="dash-section-title">Activity log</p>
-          <p class="dash-section-sub" id="activityLogHint">Sign-ins, app opens, and item changes</p>
+          <p class="dash-section-sub">Sign-ins and item changes</p>
           <div id="activityLog"></div>
         </div>
       </div>
 
     </div>
 
-    <!-- Tab Bar -->
     <nav class="tab-bar">
-      <button class="tab-btn" data-tab="dashboard">
-        <span class="tab-icon">📊</span>Dash
-      </button>
-      <button class="tab-btn active" data-tab="log">
-        <span class="tab-icon">➕</span>Log
+      <button class="tab-btn active" data-tab="review">
+        <span class="tab-icon">🖼</span>Review
       </button>
       <button class="tab-btn" data-tab="items">
         <span class="tab-icon">📋</span>Items
@@ -178,10 +173,12 @@
       <button class="tab-btn" data-tab="boxes">
         <span class="tab-icon">📦</span>Boxes
       </button>
+      <button class="tab-btn" data-tab="dashboard">
+        <span class="tab-icon">📊</span>Dash
+      </button>
     </nav>
   </div>
 
-  <!-- Action Sheet -->
   <div class="action-sheet-overlay" id="actionSheetOverlay">
     <div class="action-sheet">
       <div class="action-sheet-group" id="actionSheetOptions"></div>
@@ -192,7 +189,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-
   <script src="app.js"></script>
 </body>
 </html>
