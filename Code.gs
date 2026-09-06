@@ -16,7 +16,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-2.5-flash-lite', version: 'v17' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v18' });
 }
 
 function doPost(e) {
@@ -171,8 +171,8 @@ function analyzeImage_(base64Image) {
     }
   };
 
-  // Lite first for speed (desktop bulk). Fallback to flash once.
-  const models = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
+  // Lite first for speed (desktop bulk). 2.5-flash-lite is retired for new users.
+  const models = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash'];
   let resp = null;
   let lastError = '';
 
