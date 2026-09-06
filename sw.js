@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tor-inventory-v19';
+const CACHE_NAME = 'tor-inventory-v20';
 const ASSETS = [
   './',
   './index.html',

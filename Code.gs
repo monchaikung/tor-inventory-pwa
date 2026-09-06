@@ -7,6 +7,8 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 const ACTIVITY_SHEET_NAME = 'Activity Log';
+const INBOX_SHEET_NAME = 'Pending Inbox';
+const INBOX_FOLDER_NAME = 'Inbox';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
 const VALID_STATUSES = ['待整理', '待打包', '已打包', '已入箱', '已寄出'];
 const OPEN_RATE_LIMIT_SEC = 3600;
@@ -16,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v18' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v19' });
 }
 
 function doPost(e) {
@@ -34,6 +36,10 @@ function doPost(e) {
       case 'delete': return jsonResponse(deleteItem_(body.timestamp, user.email));
       case 'activity': return jsonResponse(getActivityLog_());
       case 'open': return jsonResponse(logAppOpen_(body.client || {}, user.email));
+      case 'inboxUpload': return jsonResponse(inboxUpload_(body, user.email));
+      case 'inboxList': return jsonResponse(inboxList_());
+      case 'inboxAnalyze': return jsonResponse(inboxAnalyze_(body.inboxId));
+      case 'inboxDelete': return jsonResponse(inboxDelete_(body.inboxId, user.email));
       default: return jsonResponse({ success: false, error: 'Unknown action' });
     }
   } catch (err) {
@@ -384,7 +390,16 @@ function logAppOpen_(client, email) {
 function saveItem_(body, email) {
   const status = isValidStatus_(body.status) ? body.status : '待整理';
   const timestamp = new Date().toISOString();
-  const photoLink = savePhoto_(body.image, body.location, timestamp);
+  var photoLink = '';
+  if (body.image) {
+    photoLink = savePhoto_(body.image, body.location, timestamp);
+  } else if (body.inboxId) {
+    photoLink = getInboxPhotoLink_(body.inboxId);
+  } else if (body.photoLink) {
+    photoLink = String(body.photoLink);
+  } else {
+    throw new Error('Missing photo');
+  }
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
   const desc = body.itemDescription || '';
   sheet.appendRow([
@@ -400,14 +415,18 @@ function saveItem_(body, email) {
     status,
     photoLink
   ]);
+  if (body.inboxId) markInboxDone_(body.inboxId);
   logActivity_(email, 'added', desc, (body.location || '') + ' · ' + status);
   return { success: true, photoLink: photoLink, timestamp: timestamp };
 }
 
 function savePhoto_(base64Image, location, timestamp) {
+  return savePhotoToFolder_(base64Image, location, timestamp, DriveApp.getFolderById(DRIVE_FOLDER_ID)).url;
+}
+
+function savePhotoToFolder_(base64Image, location, timestamp, folder) {
   if (!base64Image) throw new Error('Missing photo');
   var raw = String(base64Image);
-  // Strip data-URL prefix if the client sent one by mistake
   var comma = raw.indexOf(',');
   if (raw.indexOf('data:') === 0 && comma !== -1) raw = raw.substring(comma + 1);
   var bytes;
@@ -420,15 +439,143 @@ function savePhoto_(base64Image, location, timestamp) {
   const blob = Utilities.newBlob(
     bytes,
     'image/jpeg',
-    sanitizeFilename_(location) + '_' + Date.now() + '.jpg'
+    sanitizeFilename_(location || 'photo') + '_' + Date.now() + '.jpg'
   );
-  const file = DriveApp.getFolderById(DRIVE_FOLDER_ID).createFile(blob);
+  const file = folder.createFile(blob);
   try {
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch (e) {
-    // Folder may already allow link viewing; don't fail the whole save
+  } catch (e) {}
+  return { url: file.getUrl(), fileId: file.getId() };
+}
+
+function getInboxFolder_() {
+  const parent = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+  const it = parent.getFoldersByName(INBOX_FOLDER_NAME);
+  if (it.hasNext()) return it.next();
+  return parent.createFolder(INBOX_FOLDER_NAME);
+}
+
+function getInboxSheet_() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName(INBOX_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(INBOX_SHEET_NAME);
+    sheet.appendRow(['InboxId', 'UploadedAt', 'User', 'PhotoLink', 'FileId', 'FileName', 'CaptureTime', 'Note', 'Status']);
+    sheet.setFrozenRows(1);
   }
-  return file.getUrl();
+  return sheet;
+}
+
+function inboxUpload_(body, email) {
+  if (!body.image) throw new Error('Missing photo');
+  const inboxId = Utilities.getUuid();
+  const uploadedAt = new Date().toISOString();
+  const captureTime = body.captureTime ? String(body.captureTime) : uploadedAt;
+  const fileName = String(body.fileName || 'photo.jpg').substring(0, 120);
+  const note = String(body.note || '').substring(0, 200);
+  const saved = savePhotoToFolder_(body.image, 'inbox', uploadedAt, getInboxFolder_());
+  getInboxSheet_().appendRow([
+    inboxId,
+    uploadedAt,
+    email || '',
+    saved.url,
+    saved.fileId,
+    fileName,
+    captureTime,
+    note,
+    'pending'
+  ]);
+  logActivity_(email, 'inbox', 'Uploaded for later', fileName + ' · ' + captureTime);
+  return {
+    success: true,
+    inboxId: inboxId,
+    photoLink: saved.url,
+    fileId: saved.fileId,
+    captureTime: captureTime,
+    status: 'pending'
+  };
+}
+
+function inboxList_() {
+  const sheet = getInboxSheet_();
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return { success: true, items: [], count: 0 };
+
+  const items = [];
+  for (var i = 1; i < data.length; i++) {
+    const status = String(data[i][8] || 'pending');
+    if (status === 'done') continue;
+    const fileId = String(data[i][4] || '');
+    items.push({
+      inboxId: String(data[i][0] || ''),
+      uploadedAt: String(data[i][1] || ''),
+      user: String(data[i][2] || ''),
+      photoLink: String(data[i][3] || ''),
+      fileId: fileId,
+      thumbUrl: fileId ? ('https://drive.google.com/thumbnail?id=' + fileId + '&sz=w400') : String(data[i][3] || ''),
+      fileName: String(data[i][5] || ''),
+      captureTime: String(data[i][6] || data[i][1] || ''),
+      note: String(data[i][7] || ''),
+      status: status
+    });
+  }
+  items.sort(function(a, b) {
+    return new Date(a.captureTime).getTime() - new Date(b.captureTime).getTime();
+  });
+  return { success: true, items: items, count: items.length };
+}
+
+function findInboxRow_(inboxId) {
+  if (!inboxId) return null;
+  const sheet = getInboxSheet_();
+  const data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(inboxId)) {
+      return { sheet: sheet, row: i + 1, data: data[i] };
+    }
+  }
+  return null;
+}
+
+function getInboxPhotoLink_(inboxId) {
+  const found = findInboxRow_(inboxId);
+  if (!found) throw new Error('Inbox item not found');
+  return String(found.data[3] || '');
+}
+
+function markInboxDone_(inboxId) {
+  const found = findInboxRow_(inboxId);
+  if (!found) return;
+  found.sheet.getRange(found.row, 9).setValue('done');
+}
+
+function inboxAnalyze_(inboxId) {
+  const found = findInboxRow_(inboxId);
+  if (!found) throw new Error('Inbox item not found');
+  const fileId = String(found.data[4] || '');
+  if (!fileId) throw new Error('Inbox photo missing');
+  found.sheet.getRange(found.row, 9).setValue('processing');
+  const blob = DriveApp.getFileById(fileId).getBlob();
+  const base64 = Utilities.base64Encode(blob.getBytes());
+  try {
+    const result = analyzeImage_(base64);
+    return result;
+  } catch (err) {
+    found.sheet.getRange(found.row, 9).setValue('pending');
+    throw err;
+  }
+}
+
+function inboxDelete_(inboxId, email) {
+  const found = findInboxRow_(inboxId);
+  if (!found) throw new Error('Inbox item not found');
+  try {
+    const fileId = String(found.data[4] || '');
+    if (fileId) DriveApp.getFileById(fileId).setTrashed(true);
+  } catch (e) {}
+  found.sheet.deleteRow(found.row);
+  logActivity_(email, 'inbox', 'Removed pending photo', String(found.data[5] || ''));
+  return { success: true };
 }
 
 function sanitizeFilename_(str) {
