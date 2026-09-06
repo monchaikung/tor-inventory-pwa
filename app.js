@@ -26,7 +26,9 @@ const STATUS_CLASS = {
 
 let allItems = [];
 let reviewQueue = [];
+let uploadQueue = [];
 let reviewBusy = false;
+let uploadBusy = false;
 let editingTimestamp = null;
 let editingPhotoLink = '';
 let transportMode = 'shipped';
@@ -48,10 +50,16 @@ document.addEventListener('DOMContentLoaded', () => {
     showMainApp();
     loadAllItems();
     logAppOpen('session_resume');
+    switchTab(isPhoneLike() ? 'upload' : 'review');
   } else showLoginScreen();
   initGoogleSignIn();
   bindEvents();
 });
+
+function isPhoneLike() {
+  return /iPhone|iPod|Android.+Mobile/i.test(navigator.userAgent) ||
+    (window.matchMedia('(max-width: 700px)').matches && navigator.maxTouchPoints > 1);
+}
 
 function bindEvents() {
   $('signOutBtn').addEventListener('click', signOut);
@@ -60,6 +68,12 @@ function bindEvents() {
   $('clearQueueBtn').addEventListener('click', clearReviewQueue);
   $('runAiBtn').addEventListener('click', runAiOnQueue);
   $('submitAllBtn').addEventListener('click', submitReadyItems);
+  $('loadInboxBtn')?.addEventListener('click', loadInboxIntoReview);
+
+  $('uploadSelectBtn')?.addEventListener('click', () => $('uploadPhotoInput').click());
+  $('uploadPhotoInput')?.addEventListener('change', onUploadPhotosSelected);
+  $('uploadClearBtn')?.addEventListener('click', clearUploadQueue);
+  $('uploadSendBtn')?.addEventListener('click', sendUploadQueue);
 
   $('saveBtn').addEventListener('click', saveEditItem);
   $('cancelEditBtn').addEventListener('click', cancelEdit);
@@ -113,7 +127,7 @@ function handleCredentialResponse(response) {
   showMainApp();
   loadAllItems();
   logAppOpen('sign_in');
-  switchTab('review');
+  switchTab(isPhoneLike() ? 'upload' : 'review');
 }
 
 function getIdToken() {
@@ -237,8 +251,9 @@ async function apiCall(payload, retries = 2) {
   if (!idToken) throw new Error('Not signed in');
 
   const hasImage = !!payload.image;
-  const timeoutMs = payload.action === 'analyze' ? 45000 : hasImage ? 90000 : 35000;
-  if (payload.action === 'analyze') retries = 1;
+  const timeoutMs = (payload.action === 'analyze' || payload.action === 'inboxAnalyze') ? 45000
+    : (payload.action === 'inboxUpload' || hasImage) ? 90000 : 35000;
+  if (payload.action === 'analyze' || payload.action === 'inboxAnalyze') retries = 1;
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -347,6 +362,206 @@ async function shrinkBase64ForUpload(base64, maxChars = 350000) {
   });
 }
 
+async function getCaptureTimeIso(file) {
+  try {
+    if (window.exifr?.parse) {
+      const exif = await exifr.parse(file, ['DateTimeOriginal', 'CreateDate', 'ModifyDate']);
+      const dt = exif?.DateTimeOriginal || exif?.CreateDate || exif?.ModifyDate;
+      if (dt) {
+        const d = dt instanceof Date ? dt : new Date(dt);
+        if (!isNaN(d.getTime())) return d.toISOString();
+      }
+    }
+  } catch { /* fall through */ }
+  if (file.lastModified) return new Date(file.lastModified).toISOString();
+  return new Date().toISOString();
+}
+
+function formatCaptureTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+}
+
+function sortByCaptureTime(list) {
+  list.sort((a, b) => new Date(a.captureTime || 0) - new Date(b.captureTime || 0));
+  return list;
+}
+
+function emptyReviewItem(partial) {
+  return {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    fileName: '',
+    previewUrl: '',
+    imageBase64: '',
+    inboxId: null,
+    photoLink: '',
+    captureTime: new Date().toISOString(),
+    note: '',
+    state: 'pending',
+    error: '',
+    included: true,
+    transportMode: '寄箱',
+    location: '',
+    roomCategory: '',
+    itemDescription: '',
+    quantity: '1',
+    size: '',
+    weight: '',
+    estimatedValue: '',
+    itemStatus: '待整理',
+    ...partial
+  };
+}
+
+async function onUploadPhotosSelected(e) {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  showToast(`Preparing ${files.length} photo(s)…`, 'success');
+  for (const file of files) {
+    if (!file.type.startsWith('image/') && !/\.heic$/i.test(file.name)) continue;
+    if (file.size > 20 * 1024 * 1024) {
+      showToast(`Skipped ${file.name} (too large)`, 'error');
+      continue;
+    }
+    try {
+      const captureTime = await getCaptureTimeIso(file);
+      const dataUrl = await compressImageFile(file);
+      const base64 = await shrinkBase64ForUpload(dataUrl.split(',')[1]);
+      uploadQueue.push({
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        fileName: file.name,
+        previewUrl: 'data:image/jpeg;base64,' + base64,
+        imageBase64: base64,
+        captureTime,
+        state: 'queued'
+      });
+    } catch (err) {
+      showToast(`${file.name}: ${err.message}`, 'error');
+    }
+  }
+  sortByCaptureTime(uploadQueue);
+  renderUploadQueue();
+  updateUploadToolbar();
+}
+
+function clearUploadQueue() {
+  if (uploadBusy) { showToast('Upload in progress…', 'error'); return; }
+  uploadQueue = [];
+  renderUploadQueue();
+  updateUploadToolbar();
+}
+
+function updateUploadToolbar() {
+  const el = $('uploadProgress');
+  const btn = $('uploadSendBtn');
+  if (!el || !btn) return;
+  el.textContent = uploadQueue.length
+    ? `${uploadQueue.length} photo(s) · sorted by capture time · status 待處理`
+    : 'No photos selected';
+  btn.disabled = uploadBusy || uploadQueue.length === 0;
+}
+
+function renderUploadQueue() {
+  const container = $('uploadList');
+  if (!container) return;
+  if (!uploadQueue.length) {
+    container.innerHTML = '<div class="empty-state">Select photos on your phone.</div>';
+    return;
+  }
+  container.innerHTML = uploadQueue.map((item, idx) => `
+    <article class="review-card">
+      <div class="review-card-top">
+        <span class="review-state review-state-pending">#${idx + 1} · 待處理</span>
+        <span class="review-capture">${esc(formatCaptureTime(item.captureTime))}</span>
+      </div>
+      <div class="review-card-body">
+        <img class="review-thumb" src="${item.previewUrl}" alt="">
+        <div class="review-fields">
+          <p class="review-filename">${esc(item.fileName)}</p>
+          <p class="review-filename">Taken: ${esc(formatCaptureTime(item.captureTime))}</p>
+        </div>
+      </div>
+    </article>
+  `).join('');
+}
+
+async function sendUploadQueue() {
+  if (uploadBusy || !uploadQueue.length) return;
+  uploadBusy = true;
+  updateUploadToolbar();
+  const note = ($('uploadNote')?.value || '').trim();
+  let ok = 0;
+  let fail = 0;
+  showToast(`Uploading ${uploadQueue.length} as 待處理…`, 'success');
+  for (const item of uploadQueue) {
+    try {
+      await apiCall({
+        action: 'inboxUpload',
+        image: item.imageBase64,
+        fileName: item.fileName,
+        captureTime: item.captureTime,
+        note
+      });
+      ok++;
+      item.state = 'done';
+    } catch (err) {
+      fail++;
+      item.state = 'error';
+      showToast(`${item.fileName}: ${err.message}`, 'error');
+    }
+    updateUploadToolbar();
+  }
+  uploadBusy = false;
+  if (fail === 0) {
+    uploadQueue = [];
+    if ($('uploadNote')) $('uploadNote').value = '';
+    renderUploadQueue();
+    updateUploadToolbar();
+    showToast(`Uploaded ${ok} photo(s) · 待處理`, 'success');
+  } else {
+    uploadQueue = uploadQueue.filter((q) => q.state !== 'done');
+    renderUploadQueue();
+    updateUploadToolbar();
+    showToast(`Uploaded ${ok}, failed ${fail}`, 'error');
+  }
+}
+
+async function loadInboxIntoReview() {
+  if (reviewBusy) { showToast('Busy — wait for AI/submit.', 'error'); return; }
+  showToast('Loading inbox…', 'success');
+  try {
+    const data = await apiCall({ action: 'inboxList' });
+    const items = data.items || [];
+    if (!items.length) {
+      showToast('Inbox empty — no 待處理 photos.', 'error');
+      return;
+    }
+    reviewQueue = items.map((it) => emptyReviewItem({
+      id: it.inboxId || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      inboxId: it.inboxId,
+      fileName: it.fileName || 'inbox.jpg',
+      previewUrl: it.thumbUrl || it.photoLink || '',
+      imageBase64: '',
+      photoLink: it.photoLink || '',
+      captureTime: it.captureTime || it.uploadedAt || new Date().toISOString(),
+      note: it.note || '',
+      state: 'pending',
+      location: it.note || ''
+    }));
+    sortByCaptureTime(reviewQueue);
+    renderReviewQueue();
+    updateReviewToolbar();
+    showToast(`Loaded ${reviewQueue.length} 待處理 · oldest capture first`, 'success');
+  } catch (err) {
+    showToast(err.message || 'Could not load inbox', 'error');
+  }
+}
+
 async function onPhotosSelected(e) {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
@@ -354,36 +569,27 @@ async function onPhotosSelected(e) {
 
   showToast(`Loading ${files.length} photo(s)…`, 'success');
   for (const file of files) {
-    if (!file.type.startsWith('image/')) continue;
+    if (!file.type.startsWith('image/') && !/\.heic$/i.test(file.name)) continue;
     if (file.size > 20 * 1024 * 1024) {
       showToast(`Skipped ${file.name} (too large)`, 'error');
       continue;
     }
     try {
+      const captureTime = await getCaptureTimeIso(file);
       const dataUrl = await compressImageFile(file);
       const base64 = await shrinkBase64ForUpload(dataUrl.split(',')[1]);
-      reviewQueue.push({
-        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      reviewQueue.push(emptyReviewItem({
         fileName: file.name,
         previewUrl: 'data:image/jpeg;base64,' + base64,
         imageBase64: base64,
-        state: 'pending',
-        error: '',
-        included: true,
-        transportMode: '寄箱',
-        location: '',
-        roomCategory: '',
-        itemDescription: '',
-        quantity: '1',
-        size: '',
-        weight: '',
-        estimatedValue: '',
-        itemStatus: '待整理'
-      });
+        captureTime,
+        state: 'pending'
+      }));
     } catch (err) {
       showToast(`${file.name}: ${err.message}`, 'error');
     }
   }
+  sortByCaptureTime(reviewQueue);
   renderReviewQueue();
   updateReviewToolbar();
 }
@@ -420,7 +626,7 @@ function renderReviewQueue() {
 
 function reviewCardHtml(item) {
   const stateLabel = {
-    pending: 'Waiting for AI',
+    pending: item.inboxId ? '待處理 · Waiting for AI' : 'Waiting for AI',
     analyzing: 'AI running…',
     ready: 'Ready to submit',
     error: 'AI failed — edit manually',
@@ -450,6 +656,8 @@ function reviewCardHtml(item) {
       <img class="review-thumb" src="${item.previewUrl}" alt="">
       <div class="review-fields">
         <p class="review-filename">${esc(item.fileName)}</p>
+        <p class="review-capture">Taken: ${esc(formatCaptureTime(item.captureTime))}${item.inboxId ? ' · from Inbox' : ''}</p>
+        ${item.note ? `<p class="review-capture">Note: ${esc(item.note)}</p>` : ''}
         ${item.error ? `<p class="review-error">${esc(item.error)}</p>` : ''}
         <div class="review-field-row">
           <label>Transport</label>
@@ -594,7 +802,13 @@ async function analyzeOne(item) {
   renderReviewQueue();
   updateReviewToolbar();
   try {
-    const data = await apiCall({ action: 'analyze', image: item.imageBase64 });
+    let data;
+    if (item.inboxId) {
+      data = await apiCall({ action: 'inboxAnalyze', inboxId: item.inboxId });
+    } else {
+      if (!item.imageBase64) throw new Error('Missing photo data');
+      data = await apiCall({ action: 'analyze', image: item.imageBase64 });
+    }
     let suggestions = data.suggestions || data;
     if (typeof suggestions === 'string') {
       try { suggestions = JSON.parse(suggestions); } catch { suggestions = {}; }
@@ -658,8 +872,7 @@ async function submitReadyItems() {
     renderReviewQueue();
     updateReviewToolbar();
     try {
-      const image = await shrinkBase64ForUpload(item.imageBase64);
-      await apiCall({
+      const payload = {
         action: 'save',
         transportMode: item.transportMode,
         location: item.location.trim(),
@@ -669,9 +882,17 @@ async function submitReadyItems() {
         size: item.size.trim(),
         weight: item.weight.trim(),
         estimatedValue: item.estimatedValue.trim(),
-        status: item.itemStatus || '待整理',
-        image
-      });
+        status: item.itemStatus || '待整理'
+      };
+      if (item.inboxId) {
+        payload.inboxId = item.inboxId;
+        if (item.photoLink) payload.photoLink = item.photoLink;
+      }
+      if (item.imageBase64) {
+        payload.image = await shrinkBase64ForUpload(item.imageBase64);
+      }
+      if (!payload.image && !payload.inboxId) throw new Error('Missing photo');
+      await apiCall(payload);
       item.state = 'done';
       okCount++;
     } catch (err) {
@@ -1183,6 +1404,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
   const titles = {
+    upload: 'Upload',
     review: 'Review',
     edit: 'Edit Item',
     items: 'Inventory',
@@ -1190,6 +1412,11 @@ function switchTab(tab) {
     dashboard: 'Dashboard'
   };
   $('navTitle').textContent = titles[tab] || 'Review';
+  if (tab === 'upload') {
+    $('screenUpload').classList.add('active');
+    renderUploadQueue();
+    updateUploadToolbar();
+  }
   if (tab === 'review') $('screenReview').classList.add('active');
   if (tab === 'edit') $('screenEdit').classList.add('active');
   if (tab === 'items') { $('screenItems').classList.add('active'); renderFilteredList(); }
