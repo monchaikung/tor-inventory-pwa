@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v19' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v20' });
 }
 
 function doPost(e) {
@@ -139,9 +139,18 @@ function checkOpenRateLimit_(email) {
   return true;
 }
 
-function analyzeImage_(base64Image) {
+function analyzeImage_(base64Image, opts) {
+  opts = opts || {};
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) throw new Error('GEMINI_API_KEY not set in Script Properties');
+
+  var raw = String(base64Image || '');
+  var comma = raw.indexOf(',');
+  if (raw.indexOf('data:') === 0 && comma !== -1) raw = raw.substring(comma + 1);
+  // Cap payload size — huge Drive originals stall UrlFetch + Gemini
+  if (raw.length > 450000) {
+    throw new Error('Photo too large for AI. Re-upload a smaller JPEG. 相片太大，請用較細 JPEG 再上載。');
+  }
 
   const prompt =
     'Identify the main personal item in this photo for UK Transfer of Residence customs inventory. ' +
@@ -167,18 +176,20 @@ function analyzeImage_(base64Image) {
   const payload = {
     contents: [{ parts: [
       { text: prompt },
-      { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
+      { inline_data: { mime_type: 'image/jpeg', data: raw } }
     ]}],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 512,
       responseMimeType: 'application/json',
       responseSchema: schema
     }
   };
 
-  // Lite first for speed (desktop bulk). 2.5-flash-lite is retired for new users.
-  const models = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash'];
+  // Prefer one fast model; one fallback only (long chains cause client timeouts).
+  const models = opts.fast
+    ? ['gemini-3.5-flash-lite', 'gemini-2.5-flash']
+    : ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash'];
   let resp = null;
   let lastError = '';
 
@@ -193,19 +204,21 @@ function analyzeImage_(base64Image) {
     const code = resp.getResponseCode();
     if (code === 200) break;
     lastError = resp.getContentText();
-    const retryable = code === 503 || code === 429 || code === 500;
-    if (!retryable) break;
-    Utilities.sleep(400);
+    // 404/400 = bad model or request — try next. 429/503 = busy — try next once.
+    const tryNext = code === 404 || code === 400 || code === 503 || code === 429 || code === 500;
+    if (!tryNext) break;
+    if (m < models.length - 1) Utilities.sleep(250);
   }
 
-  if (resp.getResponseCode() !== 200) {
-    if (resp.getResponseCode() === 503) {
+  if (!resp || resp.getResponseCode() !== 200) {
+    const code = resp ? resp.getResponseCode() : 0;
+    if (code === 503) {
       throw new Error('AI is busy right now. Please wait a few seconds and try again.');
     }
-    if (resp.getResponseCode() === 429) {
+    if (code === 429) {
       throw new Error('AI rate limit reached. Wait 30 seconds and try again. AI 請求太密，請稍等再試。');
     }
-    throw new Error('Gemini API error: ' + lastError);
+    throw new Error('Gemini API error: ' + (lastError || ('HTTP ' + code)));
   }
 
   const result = JSON.parse(resp.getContentText());
@@ -555,13 +568,26 @@ function inboxAnalyze_(inboxId) {
   const fileId = String(found.data[4] || '');
   if (!fileId) throw new Error('Inbox photo missing');
   found.sheet.getRange(found.row, 9).setValue('processing');
-  const blob = DriveApp.getFileById(fileId).getBlob();
-  const base64 = Utilities.base64Encode(blob.getBytes());
   try {
-    const result = analyzeImage_(base64);
-    return result;
+    const blob = DriveApp.getFileById(fileId).getBlob();
+    var bytes = blob.getBytes();
+    // Guard: oversized Drive files (e.g. original HEIC/JPEG) blow past client timeout
+    if (bytes && bytes.length > 350000) {
+      // Prefer JPEG conversion when Drive can; otherwise fail clearly
+      try {
+        const jpeg = blob.getAs('image/jpeg');
+        bytes = jpeg.getBytes();
+      } catch (e) {}
+    }
+    if (!bytes || !bytes.length) throw new Error('Inbox photo empty');
+    if (bytes.length > 500000) {
+      found.sheet.getRange(found.row, 9).setValue('pending');
+      throw new Error('Inbox photo too large for AI. Re-upload compressed JPEG from phone.');
+    }
+    const base64 = Utilities.base64Encode(bytes);
+    return analyzeImage_(base64, { fast: true });
   } catch (err) {
-    found.sheet.getRange(found.row, 9).setValue('pending');
+    try { found.sheet.getRange(found.row, 9).setValue('pending'); } catch (e2) {}
     throw err;
   }
 }
