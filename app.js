@@ -251,9 +251,11 @@ async function apiCall(payload, retries = 2) {
   if (!idToken) throw new Error('Not signed in');
 
   const hasImage = !!payload.image;
-  const timeoutMs = (payload.action === 'analyze' || payload.action === 'inboxAnalyze') ? 45000
+  const isAi = payload.action === 'analyze' || payload.action === 'inboxAnalyze';
+  // Inbox AI: Drive fetch + Gemini can exceed 45s (esp. model fallback).
+  const timeoutMs = isAi ? 120000
     : (payload.action === 'inboxUpload' || hasImage) ? 90000 : 35000;
-  if (payload.action === 'analyze' || payload.action === 'inboxAnalyze') retries = 1;
+  if (isAi) retries = 1;
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -286,6 +288,9 @@ async function apiCall(payload, retries = 2) {
       const msg = String(err.message || err.name || err);
       const aborted = err.name === 'AbortError' || /aborted/i.test(msg);
       if (aborted) {
+        if (isAi) {
+          throw new Error('AI timed out. Tap Re-run AI (Wi‑Fi). AI 逾時，請再撳 Re-run AI。');
+        }
         throw new Error(hasImage
           ? 'Timed out. Try Wi‑Fi or a smaller photo. 逾時，請用 Wi‑Fi 或較細相片。'
           : 'Request timed out. Check Wi‑Fi. 請求逾時。');
@@ -566,7 +571,7 @@ async function sendUploadQueue() {
     return;
   }
   if (!uploadQueue.length) {
-    showToast('請先撳 Select photos 揀相', 'error');
+    showToast('請先撳 Select photos 揀相', 'error', 3500);
     return;
   }
 
@@ -577,7 +582,7 @@ async function sendUploadQueue() {
   let ok = 0;
   let fail = 0;
   const total = uploadQueue.length;
-  showToast(`Uploading 1/${total} as 待處理…`, 'success');
+  showToast(`Uploading 1/${total} as 待處理…`, 'success', 4000);
 
   for (const item of uploadQueue) {
     if (!item.imageBase64) {
