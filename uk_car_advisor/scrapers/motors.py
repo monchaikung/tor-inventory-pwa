@@ -12,6 +12,7 @@ from uk_car_advisor.scrapers.html_utils import (
     parse_postcode,
     parse_price,
     parse_year,
+    split_title,
 )
 
 MOTORS_ORIGIN = "https://www.motors.co.uk"
@@ -40,14 +41,12 @@ def parse_search_html(html: str) -> list[VehicleResult]:
         end = min(len(html), match.end() + 800)
         snippet = html_to_text(html[start:end])
         title = snippet.strip().split("\n")[0][:80]
-        parts = title.split()
-        make = parts[0] if parts else "Unknown"
-        model = parts[1] if len(parts) > 1 else "Unknown"
+        make, model, trim = split_title(title)
         vehicles.append(
             VehicleResult(
-                make=make,
-                model=model,
-                trim=" ".join(parts[2:]) or None,
+                make=make or "Unknown",
+                model=model or "Unknown",
+                trim=trim,
                 year=parse_year(snippet),
                 mileage=parse_mileage(snippet),
                 price_gbp=parse_price(snippet),

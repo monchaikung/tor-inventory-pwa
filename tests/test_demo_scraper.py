@@ -1,6 +1,6 @@
 from uk_car_advisor.models import SearchParams
 from uk_car_advisor.scrapers.demo import DemoScraper, all_demo_vehicles
-from uk_car_advisor.search import persist_results, run_search
+from uk_car_advisor.search import run_search
 
 
 def test_demo_budget_and_fuel_filters():

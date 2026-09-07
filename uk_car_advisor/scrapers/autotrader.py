@@ -12,6 +12,7 @@ from uk_car_advisor.scrapers.html_utils import (
     parse_postcode,
     parse_price,
     parse_year,
+    split_title,
 )
 
 AUTO_TRADER_SEARCH = "https://www.autotrader.co.uk/car-search"
@@ -28,18 +29,6 @@ def build_search_url(params: SearchParams) -> str:
     for fuel in params.fuel_type:
         query.append(("fuel-type", fuel))
     return f"{AUTO_TRADER_SEARCH}?{urlencode(query)}"
-
-
-def _split_title(title: str) -> tuple[str, str, str | None]:
-    cleaned = re.sub(r"\s+", " ", title).strip()
-    cleaned = re.sub(r"^(19|20)\d{2}\s+", "", cleaned)
-    parts = cleaned.split(" ")
-    if len(parts) < 2:
-        return cleaned, "", None
-    make = parts[0]
-    model = parts[1]
-    trim = " ".join(parts[2:]) or None
-    return make, model, trim
 
 
 _LISTING_HREF = re.compile(
@@ -83,7 +72,7 @@ def parse_search_html(html: str, *, source: str = "autotrader") -> list[VehicleR
             re.IGNORECASE,
         )
         title = html_to_text(title_match.group(1) if title_match else text[:180])
-        make, model, trim = _split_title(title)
+        make, model, trim = split_title(title)
         seller = "private" if re.search(r"\bprivate\b", text, re.I) else "dealer"
         dealer_name = "Private seller" if seller == "private" else _guess_dealer_name(text)
         stock = None
@@ -138,7 +127,11 @@ def parse_contact_from_html(html: str) -> dict[str, str | None]:
     text = html_to_text(html)
     phone_match = _PHONE.search(text)
     website = None
-    web_match = re.search(r'href="(https?://(?!www\.autotrader)[^"]+)"', html, re.I)
+    web_match = re.search(
+        r"""href=["'](https?://(?!www\.autotrader)[^"']+)["']""",
+        html,
+        re.I,
+    )
     if web_match:
         website = web_match.group(1)
     address = None

@@ -112,7 +112,7 @@ def render_dealer_pane(vehicle: VehicleResult) -> None:
         st.info("No other stock stored for this dealer yet.")
         return
     stock_df = to_frame(dossier.other_stock).drop(columns=["ID"], errors="ignore")
-    st.dataframe(stock_df, hide_index=True, use_container_width=True)
+    st.dataframe(stock_df, hide_index=True, width="stretch")
 
 
 def render_model_pane(vehicle: VehicleResult) -> None:
@@ -180,7 +180,7 @@ def main() -> None:
         )
         headed_default = sys.platform == "win32"
         headed = st.checkbox("Headed Playwright (live sites)", value=headed_default)
-        run = st.button("Search", type="primary", use_container_width=True)
+        run = st.button("Search", type="primary", width="stretch")
 
     if run:
         if not is_valid_uk_postcode(postcode):
@@ -226,7 +226,7 @@ def main() -> None:
     st.success(f"{len(vehicles)} listing(s) stored in cars.db (search #{st.session_state.get('search_id')}).")
     frame = to_frame(vehicles)
     display = frame.drop(columns=["ID"])
-    st.dataframe(display, hide_index=True, use_container_width=True)
+    st.dataframe(display, hide_index=True, width="stretch")
 
     labels = []
     for vehicle in vehicles:
@@ -260,7 +260,7 @@ def main() -> None:
     if len(compare_labels) >= 2:
         chosen = [vehicles[labels.index(item)] for item in compare_labels]
         table = comparison_table(chosen)
-        st.dataframe(pd.DataFrame(table), use_container_width=True)
+        st.dataframe(pd.DataFrame(table), width="stretch")
     else:
         st.caption("Pick at least two listings to compare.")
 
