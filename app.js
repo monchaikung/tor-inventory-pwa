@@ -38,6 +38,7 @@ let selectedStatus = '待整理';
 let filterTransport = '';
 let filterStatus = '';
 let filterLocation = '';
+let selectedItemTimestamps = new Set();
 let activityEntries = [];
 let openSwipeRow = null;
 
@@ -67,6 +68,7 @@ function bindEvents() {
   $('selectPhotosBtn').addEventListener('click', () => $('bulkPhotoInput').click());
   $('bulkPhotoInput').addEventListener('change', onPhotosSelected);
   $('clearQueueBtn').addEventListener('click', clearReviewQueue);
+  $('reviewBulkStatusBtn')?.addEventListener('click', openReviewBulkStatusPicker);
   $('runAiBtn').addEventListener('click', runAiOnQueue);
   $('rebuildTorListBtn')?.addEventListener('click', rebuildTorList);
   $('submitAllBtn').addEventListener('click', submitReadyItems);
@@ -82,6 +84,9 @@ function bindEvents() {
   $('cancelEditBtn').addEventListener('click', cancelEdit);
   $('searchInput').addEventListener('input', onSearchInput);
   $('searchClear').addEventListener('click', clearSearch);
+  $('bulkSelectAll')?.addEventListener('change', onBulkSelectAll);
+  $('bulkStatusBtn')?.addEventListener('click', openBulkStatusPicker);
+  $('bulkClearBtn')?.addEventListener('click', clearBulkSelection);
   $('handCarryPickerBtn').addEventListener('click', openHandCarryPicker);
   $('statusPickerBtn').addEventListener('click', openStatusPicker);
   $('actionSheetCancel').addEventListener('click', closeActionSheet);
@@ -255,9 +260,10 @@ async function apiCall(payload, retries = 2) {
 
   const hasImage = !!payload.image;
   const isAi = payload.action === 'analyze' || payload.action === 'inboxAnalyze';
+  const isBulk = payload.action === 'bulkUpdate';
   // Inbox AI: Drive fetch + Gemini can exceed 45s (esp. model fallback).
   const timeoutMs = isAi ? 120000
-    : (payload.action === 'inboxUpload' || hasImage) ? 90000 : 35000;
+    : (payload.action === 'inboxUpload' || hasImage || isBulk) ? 90000 : 35000;
   if (isAi) retries = 1;
 
   let lastErr;
@@ -758,17 +764,57 @@ function clearReviewQueue() {
   updateReviewToolbar();
 }
 
+function getReviewBulkStatusTargets() {
+  return reviewQueue.filter((q) =>
+    q.included &&
+    q.state !== 'done' &&
+    q.state !== 'submitting' &&
+    q.state !== 'analyzing'
+  );
+}
+
 function updateReviewToolbar() {
   const pending = reviewQueue.filter((q) => q.state === 'pending' || q.state === 'error').length;
   const ready = reviewQueue.filter((q) => q.state === 'ready' && q.included).length;
   const done = reviewQueue.filter((q) => q.state === 'done').length;
   const analyzing = reviewQueue.filter((q) => q.state === 'analyzing' || q.state === 'submitting').length;
+  const bulkTargets = getReviewBulkStatusTargets().length;
   $('reviewProgress').textContent = reviewQueue.length
     ? `${reviewQueue.length} photos · ${pending} need AI · ${ready} ready · ${done} submitted`
     : 'No photos yet';
+  const bulkBtn = $('reviewBulkStatusBtn');
+  if (bulkBtn) bulkBtn.disabled = reviewBusy || bulkTargets === 0;
   $('runAiBtn').disabled = reviewBusy || pending === 0;
   $('submitAllBtn').disabled = reviewBusy || ready === 0;
   if (analyzing) $('reviewProgress').textContent += ` · working…`;
+}
+
+function openReviewBulkStatusPicker() {
+  if (reviewBusy) {
+    showToast('Busy — wait for AI/submit to finish.', 'error');
+    return;
+  }
+  const targets = getReviewBulkStatusTargets();
+  if (!targets.length) {
+    showToast('勾選 Include 嘅卡片先 Select included cards first', 'error');
+    return;
+  }
+  openActionSheet(
+    STATUS_OPTIONS.map((s) => ({ label: s.label, value: s.value })),
+    (value) => {
+      if (!value) return;
+      applyReviewBulkStatus(value);
+    }
+  );
+}
+
+function applyReviewBulkStatus(status) {
+  const targets = getReviewBulkStatusTargets();
+  if (!targets.length) return;
+  targets.forEach((item) => { item.itemStatus = status; });
+  renderReviewQueue();
+  updateReviewToolbar();
+  showToast(`Status → ${status} · ${targets.length} card(s)`, 'success');
 }
 
 function renderReviewQueue() {
@@ -909,9 +955,7 @@ function bindReviewCard(card) {
 
   card.querySelector('[data-action="remove"]')?.addEventListener('click', () => {
     if (reviewBusy) return;
-    reviewQueue = reviewQueue.filter((q) => q.id !== id);
-    renderReviewQueue();
-    updateReviewToolbar();
+    confirmRemoveReviewItem(item);
   });
 
   card.querySelector('[data-action="reai"]')?.addEventListener('click', async () => {
@@ -920,6 +964,36 @@ function bindReviewCard(card) {
     renderReviewQueue();
     updateReviewToolbar();
   });
+}
+
+function confirmRemoveReviewItem(item) {
+  if (!item) return;
+  const name = (item.fileName || item.itemDescription || 'photo').slice(0, 28);
+  const label = item.inboxId
+    ? `Delete from Inbox「${name}」`
+    : `Remove「${name}」`;
+  openActionSheet(
+    [{ label, value: 'remove', destructive: true }],
+    async (v) => {
+      if (v !== 'remove') return;
+      await removeReviewItem(item);
+    }
+  );
+}
+
+async function removeReviewItem(item) {
+  if (!item || reviewBusy) return;
+  try {
+    if (item.inboxId) {
+      await apiCall({ action: 'inboxDelete', inboxId: item.inboxId });
+    }
+    reviewQueue = reviewQueue.filter((q) => q.id !== item.id);
+    renderReviewQueue();
+    updateReviewToolbar();
+    showToast(item.inboxId ? 'Deleted from Inbox 已從 Inbox 刪除' : 'Removed', 'success');
+  } catch (err) {
+    showToast(err.message || 'Remove failed', 'error');
+  }
 }
 
 function pickAiField(data, keys) {
@@ -1464,6 +1538,15 @@ function bindItemSwipe(wrap) {
   wrap.querySelectorAll('[data-action="photo"]').forEach((el) => {
     el.addEventListener('click', (e) => e.stopPropagation());
   });
+  wrap.querySelector('[data-action="select"]')?.addEventListener('click', (e) => e.stopPropagation());
+  wrap.querySelector('[data-select-ts]')?.addEventListener('change', (e) => {
+    e.stopPropagation();
+    const t = String(e.target.getAttribute('data-select-ts') || ts);
+    if (e.target.checked) selectedItemTimestamps.add(t);
+    else selectedItemTimestamps.delete(t);
+    wrap.classList.toggle('selected', e.target.checked);
+    updateBulkBar();
+  });
   wrap.querySelector('[data-swipe="status"]')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const item = allItems.find((i) => i.timestamp === ts);
@@ -1546,10 +1629,20 @@ function renderFilteredList() {
   const list = $('itemList');
   if (!list) return;
   const items = getFilteredItems();
-  $('resultCount').textContent = `${items.length} result(s)`;
-  if (!items.length) { list.innerHTML = '<div class="empty-state">No items found.</div>'; return; }
+  const countEl = $('resultCount');
+  if (countEl) countEl.textContent = `${items.length} result(s)`;
+  // Drop selections for deleted items; keep selections that are just filtered out
+  selectedItemTimestamps.forEach((ts) => {
+    if (!allItems.some((i) => String(i.timestamp) === String(ts))) selectedItemTimestamps.delete(ts);
+  });
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-state">No items found.</div>';
+    updateBulkBar();
+    return;
+  }
   list.innerHTML = items.map(renderItemCard).join('');
   list.querySelectorAll('.item-swipe-wrap').forEach(bindItemSwipe);
+  updateBulkBar();
 }
 
 function renderItemCard(item) {
@@ -1562,7 +1655,86 @@ function renderItemCard(item) {
     ? `<a class="item-action-btn" href="${esc(item.photoLink)}" target="_blank" rel="noopener" data-action="photo">View Photo</a>`
     : '';
   const actions = `<div class="item-actions"><button type="button" class="item-action-btn" data-action="edit">Edit</button><button type="button" class="item-action-btn destructive" data-action="delete">Delete</button>${photoBtn}</div>`;
-  return `<div class="item-swipe-wrap" data-timestamp="${ts}"><div class="item-swipe-behind"><div class="swipe-actions-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="swipe-actions-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main">${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory || '')}</div></div><span class="status-badge ${sc}">${esc(item.status || '待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity || '1')}</p><p>尺寸: ${esc(item.size || '—')} · 重量: ${esc(item.weight || '—')}</p><p>£${esc(item.estimatedValue || '—')}</p>${actions}</div>${actions.replace('item-actions"', 'item-actions item-actions-desktop"')}</div></div></div>`;
+  return `<div class="item-swipe-wrap${selectedItemTimestamps.has(String(item.timestamp)) ? ' selected' : ''}" data-timestamp="${ts}"><div class="item-swipe-behind"><div class="swipe-actions-left"><button type="button" class="swipe-btn" data-swipe="edit">Edit</button><button type="button" class="swipe-btn destructive" data-swipe="delete">Delete</button></div><div class="swipe-actions-right"><button type="button" class="swipe-btn" data-swipe="status">${esc(nextStatus.value)} ›</button></div></div><div class="item-swipe-content"><div class="item-card"><div class="item-card-main"><label class="item-select" data-action="select"><input type="checkbox" data-select-ts="${ts}" ${selectedItemTimestamps.has(String(item.timestamp)) ? 'checked' : ''}></label>${thumb}<div class="item-info"><div class="item-title">${esc(item.itemDescription)}</div><div class="item-subtitle">${transportIcon} ${esc(item.location)} · ${esc(item.roomCategory || '')}</div></div><span class="status-badge ${sc}">${esc(item.status || '待整理')}</span><span class="item-chevron">›</span></div><div class="item-detail hidden"><p>運送: ${esc(item.transportMode)} · Qty: ${esc(item.quantity || '1')}</p><p>尺寸: ${esc(item.size || '—')} · 重量: ${esc(item.weight || '—')}</p><p>£${esc(item.estimatedValue || '—')}</p>${actions}</div>${actions.replace('item-actions"', 'item-actions item-actions-desktop"')}</div></div></div>`;
+}
+
+
+function updateBulkBar() {
+  const count = selectedItemTimestamps.size;
+  const countEl = $('bulkCount');
+  const statusBtn = $('bulkStatusBtn');
+  const clearBtn = $('bulkClearBtn');
+  const selectAll = $('bulkSelectAll');
+  if (countEl) countEl.textContent = count + ' selected';
+  if (statusBtn) statusBtn.disabled = count === 0;
+  if (clearBtn) clearBtn.disabled = count === 0;
+  if (selectAll) {
+    const visible = getFilteredItems();
+    const allOn = visible.length > 0 && visible.every((i) => selectedItemTimestamps.has(String(i.timestamp)));
+    selectAll.checked = allOn;
+    selectAll.indeterminate = count > 0 && !allOn;
+  }
+}
+
+function onBulkSelectAll(e) {
+  const visible = getFilteredItems();
+  if (e.target.checked) visible.forEach((i) => selectedItemTimestamps.add(String(i.timestamp)));
+  else visible.forEach((i) => selectedItemTimestamps.delete(String(i.timestamp)));
+  renderFilteredList();
+}
+
+function clearBulkSelection() {
+  selectedItemTimestamps.clear();
+  renderFilteredList();
+}
+
+function openBulkStatusPicker() {
+  if (!selectedItemTimestamps.size) {
+    showToast('請先勾選物品 Select items first', 'error');
+    return;
+  }
+  openActionSheet(
+    STATUS_OPTIONS.map((s) => ({ label: s.label, value: s.value })),
+    async (value) => {
+      if (!value) return;
+      await bulkChangeStatus(value);
+    }
+  );
+}
+
+async function bulkChangeStatus(status) {
+  const timestamps = Array.from(selectedItemTimestamps);
+  if (!timestamps.length) return;
+  const statusBtn = $('bulkStatusBtn');
+  if (statusBtn) statusBtn.disabled = true;
+  try {
+    showToast('Updating ' + timestamps.length + ' item(s)…', 'success');
+    let data;
+    try {
+      data = await apiCall({ action: 'bulkUpdate', timestamps, status });
+    } catch (err) {
+      // Fallback if GAS not redeployed yet (no bulkUpdate action)
+      if (!/Unknown action/i.test(err.message || '')) throw err;
+      for (const ts of timestamps) {
+        await apiCall({ action: 'update', timestamp: ts, status });
+      }
+      data = { updated: timestamps };
+    }
+    const updated = new Set((data.updated || timestamps).map(String));
+    allItems.forEach((item) => {
+      if (updated.has(String(item.timestamp))) item.status = status;
+    });
+    localStorage.setItem('torItems', JSON.stringify(allItems));
+    selectedItemTimestamps.clear();
+    renderFilteredList();
+    renderBoxSummary();
+    renderProgressBars();
+    renderDashboard();
+    showToast('Status → ' + status + ' · ' + updated.size + ' item(s)', 'success');
+  } catch (err) {
+    showToast(err.message || 'Bulk update failed', 'error');
+    updateBulkBar();
+  }
 }
 
 async function cycleStatus(item) {

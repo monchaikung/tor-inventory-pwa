@@ -1159,3 +1159,60 @@ html, body {
   outline: 2px solid #FF3B30 !important;
   background: #FFF5F5 !important;
 }
+
+
+/* Bulk status edit */
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 10px;
+  padding: 10px 12px;
+  background: var(--ios-card, #fff);
+  border-radius: 12px;
+}
+.bulk-select-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.bulk-select-all input {
+  width: 18px;
+  height: 18px;
+}
+.bulk-count {
+  flex: 1;
+  font-size: 13px;
+  color: var(--ios-label-secondary, #8E8E93);
+}
+.bulk-actions {
+  display: flex;
+  gap: 8px;
+}
+.bulk-actions .ios-btn-secondary {
+  width: auto;
+  margin: 0;
+  padding: 8px 12px;
+  height: auto;
+  font-size: 14px;
+}
+.bulk-actions .ios-btn-secondary:disabled {
+  opacity: 0.4;
+}
+.item-select {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+}
+.item-select input {
+  width: 20px;
+  height: 20px;
+}
+.item-swipe-wrap.selected .item-swipe-content,
+.item-swipe-wrap.selected .item-card {
+  background: #E8F1FF;
+}

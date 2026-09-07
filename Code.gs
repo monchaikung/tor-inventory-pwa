@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v25' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v26' });
 }
 
 function doPost(e) {
@@ -32,6 +32,7 @@ function doPost(e) {
       case 'save': return jsonResponse(saveItem_(body, user.email));
       case 'search': return jsonResponse(searchItems_(body.query || ''));
       case 'update': return jsonResponse(updateStatus_(body.timestamp, body.status, user.email));
+      case 'bulkUpdate': return jsonResponse(bulkUpdateStatus_(body.timestamps, body.status, user.email));
       case 'edit': return jsonResponse(editItem_(body, user.email));
       case 'delete': return jsonResponse(deleteItem_(body.timestamp, user.email));
       case 'activity': return jsonResponse(getActivityLog_());
@@ -713,6 +714,32 @@ function updateStatus_(timestamp, status, email) {
     }
   }
   throw new Error('Item not found');
+}
+
+function bulkUpdateStatus_(timestamps, status, email) {
+  if (!isValidStatus_(status)) throw new Error('Invalid status');
+  if (!timestamps || !timestamps.length) throw new Error('No items selected');
+  var wanted = {};
+  for (var t = 0; t < timestamps.length; t++) {
+    wanted[String(timestamps[t])] = true;
+  }
+  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  var data = sheet.getDataRange().getValues();
+  var updated = [];
+  var changed = 0;
+  for (var i = 1; i < data.length; i++) {
+    var ts = String(data[i][0]);
+    if (!wanted[ts]) continue;
+    var oldStatus = String(data[i][9] || '');
+    if (oldStatus !== String(status)) {
+      sheet.getRange(i + 1, 10).setValue(status);
+      changed++;
+    }
+    updated.push(ts);
+  }
+  if (!updated.length) throw new Error('No matching items found');
+  logActivity_(email, 'bulk-status', changed + ' changed → ' + status, updated.length + ' selected');
+  return { success: true, updated: updated, count: updated.length, changed: changed };
 }
 
 function editItem_(body, email) {
