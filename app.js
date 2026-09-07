@@ -955,9 +955,7 @@ function bindReviewCard(card) {
 
   card.querySelector('[data-action="remove"]')?.addEventListener('click', () => {
     if (reviewBusy) return;
-    reviewQueue = reviewQueue.filter((q) => q.id !== id);
-    renderReviewQueue();
-    updateReviewToolbar();
+    confirmRemoveReviewItem(item);
   });
 
   card.querySelector('[data-action="reai"]')?.addEventListener('click', async () => {
@@ -966,6 +964,36 @@ function bindReviewCard(card) {
     renderReviewQueue();
     updateReviewToolbar();
   });
+}
+
+function confirmRemoveReviewItem(item) {
+  if (!item) return;
+  const name = (item.fileName || item.itemDescription || 'photo').slice(0, 28);
+  const label = item.inboxId
+    ? `Delete from Inbox「${name}」`
+    : `Remove「${name}」`;
+  openActionSheet(
+    [{ label, value: 'remove', destructive: true }],
+    async (v) => {
+      if (v !== 'remove') return;
+      await removeReviewItem(item);
+    }
+  );
+}
+
+async function removeReviewItem(item) {
+  if (!item || reviewBusy) return;
+  try {
+    if (item.inboxId) {
+      await apiCall({ action: 'inboxDelete', inboxId: item.inboxId });
+    }
+    reviewQueue = reviewQueue.filter((q) => q.id !== item.id);
+    renderReviewQueue();
+    updateReviewToolbar();
+    showToast(item.inboxId ? 'Deleted from Inbox 已從 Inbox 刪除' : 'Removed', 'success');
+  } catch (err) {
+    showToast(err.message || 'Remove failed', 'error');
+  }
 }
 
 function pickAiField(data, keys) {
