@@ -1,8 +1,12 @@
 // ============ CONFIGURATION ============
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyOy2Ock7nEv6jPevdzhk_KNkCMetLFBX8anQ-PYKq3TOaMCnVcB3XKTndDfbDBZvsFjg/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v32';
+const APP_CACHE_NAME = 'tor-inventory-v33';
 const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
+const AI_GAP_MS = 1200;          // pause between AI calls to ease GAS load
+const AI_BACKOFF_MS = 6000;      // extra wait after timeout/quota-like errors
+let gasLimitWarning = '';        // shown on Review + Dash when GAS is struggling
+let aiQueueProgress = null;      // { current, total, label }
 
 const HAND_CARRY_OPTIONS = [
   { id: 'personal-bag', label: '隨身背囊', sub: 'Personal Item', icon: '🎒' },
@@ -296,6 +300,7 @@ async function apiCall(payload, retries = 2) {
         }
         if (!isLog) {
           queueSyslogError_('client', errMsg, `action=${payload.action || '?'} status=${res.status} body=${snippet}`);
+          noteGasLimitWarning_(errMsg);
         }
         throw new Error(errMsg);
       }
@@ -307,10 +312,15 @@ async function apiCall(payload, retries = 2) {
         }
         if (!isLog) {
           queueSyslogError_('client', data.error || 'Request failed', `action=${payload.action || '?'}`);
+          noteGasLimitWarning_(data.error || '');
         }
         throw new Error(data.error || 'Request failed');
       }
-      if (!isLog) flushSyslogQueue_();
+      if (!isLog) {
+        flushSyslogQueue_();
+        // Successful call clears soft warning after a healthy response
+        if (gasLimitWarning && !isAi) clearGasLimitWarning_();
+      }
       return data;
     } catch (err) {
       lastErr = err;
@@ -319,7 +329,10 @@ async function apiCall(payload, retries = 2) {
       if (aborted) {
         if (isAi) {
           const tMsg = 'AI timed out. Tap Re-run AI (Wi‑Fi). AI 逾時，請再撳 Re-run AI。';
-          if (!isLog) queueSyslogError_('client', tMsg, `action=${payload.action || '?'}`);
+          if (!isLog) {
+            queueSyslogError_('client', tMsg, `action=${payload.action || '?'}`);
+            noteGasLimitWarning_(tMsg);
+          }
           throw new Error(tMsg);
         }
         if (isSave) {
@@ -884,17 +897,58 @@ function clearReviewQueue() {
   updateReviewToolbar();
 }
 
+function isGasLimitLikeError_(msg) {
+  const s = String(msg || '');
+  return /timed out|逾時|timeout|quota|rate limit|too many|Service invoked too many|Exceeded maximum|HTML page|Invalid server response|網路不穩|Network error|429|503/i.test(s);
+}
+
+function noteGasLimitWarning_(msg) {
+  if (!isGasLimitLikeError_(msg)) return;
+  gasLimitWarning = 'GAS may be slow / rate-limited. AI runs one-by-one with pauses. Wait on Wi‑Fi, then retry. GAS 可能繁忙／限流，AI 會逐張暫停再跑。';
+  renderGasLimitBanner_();
+}
+
+function clearGasLimitWarning_() {
+  gasLimitWarning = '';
+  renderGasLimitBanner_();
+}
+
+function renderGasLimitBanner_() {
+  ['gasLimitBanner', 'gasLimitBannerDash'].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    if (!gasLimitWarning) {
+      el.classList.add('hidden');
+      el.textContent = '';
+      return;
+    }
+    el.textContent = gasLimitWarning;
+    el.classList.remove('hidden');
+  });
+}
+
+function sleep_(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 function updateReviewToolbar() {
   const pending = reviewQueue.filter((q) => q.state === 'pending' || q.state === 'error').length;
   const ready = reviewQueue.filter((q) => q.state === 'ready' && q.included).length;
   const done = reviewQueue.filter((q) => q.state === 'done').length;
   const analyzing = reviewQueue.filter((q) => q.state === 'analyzing' || q.state === 'submitting').length;
-  $('reviewProgress').textContent = reviewQueue.length
+  let text = reviewQueue.length
     ? `${reviewQueue.length} photos · ${pending} need AI · ${ready} ready · ${done} submitted`
     : 'No photos yet';
+  if (aiQueueProgress) {
+    text += ` · AI ${aiQueueProgress.current}/${aiQueueProgress.total}`;
+    if (aiQueueProgress.label) text += ` · ${aiQueueProgress.label}`;
+  } else if (analyzing) {
+    text += ' · working…';
+  }
+  $('reviewProgress').textContent = text;
   $('runAiBtn').disabled = reviewBusy || pending === 0;
   $('submitAllBtn').disabled = reviewBusy || ready === 0;
-  if (analyzing) $('reviewProgress').textContent += ` · working…`;
+  renderGasLimitBanner_();
 }
 
 function renderReviewQueue() {
@@ -1149,14 +1203,36 @@ async function runAiOnQueue() {
   if (!targets.length) return;
   reviewBusy = true;
   updateReviewToolbar();
-  showToast(`Running AI on ${targets.length} photo(s)…`, 'success');
+  showToast(`Running AI on ${targets.length} photo(s) · one-by-one…`, 'success');
 
-  // Round 1
-  for (const item of targets) {
-    await analyzeOne(item);
-    renderReviewQueue();
-    updateReviewToolbar();
+  async function runSequential_(list, roundLabel) {
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      aiQueueProgress = {
+        current: i + 1,
+        total: list.length,
+        label: roundLabel || 'running'
+      };
+      updateReviewToolbar();
+      await analyzeOne(item);
+      renderReviewQueue();
+      updateReviewToolbar();
+
+      const failedLike = isGasLimitLikeError_(item.error);
+      if (failedLike) {
+        aiQueueProgress.label = 'pausing (GAS busy)';
+        updateReviewToolbar();
+        await sleep_(AI_BACKOFF_MS);
+      } else if (i < list.length - 1) {
+        aiQueueProgress.label = 'pause';
+        updateReviewToolbar();
+        await sleep_(AI_GAP_MS);
+      }
+    }
   }
+
+  // Round 1 — sequential with gaps
+  await runSequential_(targets, 'round 1');
 
   // Round 2: retry failures after first round finishes
   const failed = targets.filter(isAiFailure);
@@ -1165,12 +1241,12 @@ async function runAiOnQueue() {
     for (const item of failed) {
       item.state = 'pending';
       item.error = '';
-      await analyzeOne(item);
-      renderReviewQueue();
-      updateReviewToolbar();
     }
+    await sleep_(AI_BACKOFF_MS);
+    await runSequential_(failed, 'retry');
   }
 
+  aiQueueProgress = null;
   reviewBusy = false;
   updateReviewToolbar();
   const ready = reviewQueue.filter((q) => q.state === 'ready' && String(q.itemDescription || '').trim()).length;

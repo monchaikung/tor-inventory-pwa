@@ -1008,6 +1008,18 @@ html, body {
 .conn-row.fail .conn-name { color: #FF3B30; }
 .conn-row.run .conn-name { color: var(--ios-blue, #007AFF); }
 
+.gas-limit-banner {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #FFF4E5;
+  color: #9A5B00;
+  font-size: 13px;
+  line-height: 1.4;
+  border: 1px solid #FFD59A;
+}
+.gas-limit-banner.hidden { display: none; }
+
 .tab-btn { font-size: 9px; }
 
 /* Desktop review queue */

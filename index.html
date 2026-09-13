@@ -88,6 +88,7 @@
       <!-- REVIEW: select → AI → check → submit -->
       <div id="screenReview" class="screen active">
         <p class="review-hint">Load phone inbox（按影相時間）或揀本機相 → Run AI（唔會改 Transport／Box #）→ 檢查 → Submit<br>Load inbox or local photos → Run AI (won't change Transport / Box #) → check → Submit</p>
+        <div id="gasLimitBanner" class="gas-limit-banner hidden" role="status"></div>
         <div class="ios-btn-row">
           <button class="ios-btn-secondary" id="loadInboxBtn">📥 Load Inbox</button>
           <button class="ios-btn-secondary" id="selectPhotosBtn">🖼 Local photos</button>
@@ -203,6 +204,7 @@
           <div id="connStatusList" class="conn-list">
             <p class="activity-loading">Tap Run checks to test the full path.</p>
           </div>
+          <div id="gasLimitBannerDash" class="gas-limit-banner hidden" style="margin-top:10px;" role="status"></div>
         </div>
         <div class="ios-card dash-section">
           <p class="dash-section-title">Syslog / errors</p>
