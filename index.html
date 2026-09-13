@@ -192,6 +192,18 @@
       </div>
 
       <div id="screenDashboard" class="screen">
+        <div class="ios-card dash-section">
+          <div class="conn-head">
+            <div>
+              <p class="dash-section-title">Connection status</p>
+              <p class="dash-section-sub">User → GitHub Pages → GAS → Google Sheet / Drive</p>
+            </div>
+            <button type="button" class="ios-btn-secondary" id="runConnCheckBtn">Run checks</button>
+          </div>
+          <div id="connStatusList" class="conn-list">
+            <p class="activity-loading">Tap Run checks to test the full path.</p>
+          </div>
+        </div>
         <div class="ios-btn-row" style="margin-bottom:12px;">
           <button type="button" class="ios-btn-secondary" id="rebuildTorListBtn">📋 Rebuild TOR Item List</button>
         </div>

@@ -1,6 +1,7 @@
 // ============ CONFIGURATION ============
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwpQjBvagza2ITagHh66NDTxe4vMhtiAOR2pywBkKAdaQ7pZbihBg29IihgdzfyR2g_qA/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
+const APP_CACHE_NAME = 'tor-inventory-v30';
 
 const HAND_CARRY_OPTIONS = [
   { id: 'personal-bag', label: '隨身背囊', sub: 'Personal Item', icon: '🎒' },
@@ -69,6 +70,7 @@ function bindEvents() {
   $('clearQueueBtn').addEventListener('click', clearReviewQueue);
   $('runAiBtn').addEventListener('click', runAiOnQueue);
   $('rebuildTorListBtn')?.addEventListener('click', rebuildTorList);
+  $('runConnCheckBtn')?.addEventListener('click', runConnectionChecks);
   $('submitAllBtn').addEventListener('click', submitReadyItems);
   $('loadInboxBtn')?.addEventListener('click', loadInboxIntoReview);
 
@@ -1344,6 +1346,116 @@ async function loadActivityLog() {
   }
 }
 
+function renderConnRow_(name, state, detail) {
+  const icon = state === 'ok' ? '✅' : state === 'fail' ? '❌' : state === 'run' ? '⏳' : '•';
+  const cls = state === 'ok' ? 'ok' : state === 'fail' ? 'fail' : state === 'run' ? 'run' : '';
+  return `<div class="conn-row ${cls}"><span class="conn-icon">${icon}</span><div class="conn-body"><div class="conn-name">${esc(name)}</div><div class="conn-detail">${esc(detail || '')}</div></div></div>`;
+}
+
+function setConnStatusRows_(rows) {
+  const el = $('connStatusList');
+  if (!el) return;
+  el.innerHTML = rows.map((r) => renderConnRow_(r.name, r.state, r.detail)).join('');
+}
+
+async function pingGasPublic_() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(GAS_API_URL, { method: 'GET', redirect: 'follow', signal: ctrl.signal });
+    const raw = await res.text();
+    let data;
+    try { data = JSON.parse(raw); } catch {
+      throw new Error(/<html/i.test(raw)
+        ? 'GAS returned HTML (set deployment access to Anyone / 任何人)'
+        : 'GAS GET was not JSON');
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runConnectionChecks() {
+  const btn = $('runConnCheckBtn');
+  if (btn) btn.disabled = true;
+  const rows = [
+    { name: '1. App (GitHub Pages)', state: 'run', detail: 'Checking…' },
+    { name: '2. GAS public ping', state: 'run', detail: 'Checking…' },
+    { name: '3. Google sign-in', state: 'run', detail: 'Checking…' },
+    { name: '4. GAS + Sheet / Drive / Inbox', state: 'run', detail: 'Checking…' }
+  ];
+  setConnStatusRows_(rows);
+
+  // 1) Frontend / Pages
+  try {
+    const sw = navigator.serviceWorker?.controller ? 'SW active' : 'SW not controlling yet';
+    const cache = APP_CACHE_NAME;
+    rows[0] = {
+      name: '1. App (GitHub Pages)',
+      state: 'ok',
+      detail: `${location.origin}${location.pathname} · ${cache} · ${sw}`
+    };
+  } catch (err) {
+    rows[0] = { name: '1. App (GitHub Pages)', state: 'fail', detail: err.message || 'App check failed' };
+  }
+  setConnStatusRows_(rows);
+
+  // 2) Public GAS GET
+  try {
+    const data = await pingGasPublic_();
+    const ver = data.version || data.apiVersion || '?';
+    rows[1] = {
+      name: '2. GAS public ping',
+      state: data.status === 'ok' || data.success ? 'ok' : 'fail',
+      detail: `API ${ver} · ${data.message || data.model || 'ok'}`
+    };
+  } catch (err) {
+    rows[1] = { name: '2. GAS public ping', state: 'fail', detail: err.message || 'GAS unreachable' };
+  }
+  setConnStatusRows_(rows);
+
+  // 3) Sign-in
+  const token = getIdToken();
+  if (!token) {
+    rows[2] = { name: '3. Google sign-in', state: 'fail', detail: 'Not signed in' };
+    rows[3] = { name: '4. GAS + Sheet / Drive / Inbox', state: 'fail', detail: 'Sign in first' };
+    setConnStatusRows_(rows);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  rows[2] = { name: '3. Google sign-in', state: 'ok', detail: 'ID token present' };
+  setConnStatusRows_(rows);
+
+  // 4) Authenticated health (Sheet + Drive + Inbox)
+  try {
+    const health = await apiCall({ action: 'health' });
+    const parts = [];
+    parts.push(health.sheetOk ? `Sheet OK (${health.itemCount || 0} rows)` : `Sheet FAIL: ${health.sheetError || '?'}`);
+    parts.push(health.driveOk ? 'Drive OK' : `Drive FAIL: ${health.driveError || '?'}`);
+    parts.push(health.inboxOk ? `Inbox OK (${health.inboxPending || 0} pending)` : `Inbox FAIL: ${health.inboxError || '?'}`);
+    if (health.email) parts.push(health.email);
+    if (health.version) parts.push(`API ${health.version}`);
+    rows[3] = {
+      name: '4. GAS + Sheet / Drive / Inbox',
+      state: health.ok ? 'ok' : 'fail',
+      detail: parts.join(' · ')
+    };
+  } catch (err) {
+    rows[3] = {
+      name: '4. GAS + Sheet / Drive / Inbox',
+      state: 'fail',
+      detail: err.message || 'Authenticated GAS call failed'
+    };
+  }
+  setConnStatusRows_(rows);
+  if (btn) btn.disabled = false;
+
+  const failed = rows.filter((r) => r.state === 'fail').length;
+  if (!failed) showToast('All connections OK ✅', 'success');
+  else showToast(`${failed} check(s) failed — see Dashboard`, 'error', 4000);
+}
+
 function renderDashboard() {
   const statsEl = $('dashStats');
   const barsEl = $('dashStatusBars');
@@ -1704,7 +1816,12 @@ function switchTab(tab) {
   if (tab === 'edit') $('screenEdit').classList.add('active');
   if (tab === 'items') { $('screenItems').classList.add('active'); renderFilteredList(); }
   if (tab === 'boxes') { $('screenBoxes').classList.add('active'); renderBoxSummary(); renderProgressBars(); }
-  if (tab === 'dashboard') { $('screenDashboard').classList.add('active'); renderDashboard(); loadActivityLog(); }
+  if (tab === 'dashboard') {
+    $('screenDashboard').classList.add('active');
+    renderDashboard();
+    loadActivityLog();
+    runConnectionChecks();
+  }
 }
 
 function showToast(msg, type = 'success', ms = 2800) {

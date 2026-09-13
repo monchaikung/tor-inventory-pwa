@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v27' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v28' });
 }
 
 function doPost(e) {
@@ -41,6 +41,7 @@ function doPost(e) {
       case 'inboxAnalyze': return jsonResponse(inboxAnalyze_(body.inboxId));
       case 'inboxDelete': return jsonResponse(inboxDelete_(body.inboxId, user.email));
       case 'rebuildTorList': return jsonResponse(rebuildTorItemList_(user.email));
+      case 'health': return jsonResponse(healthCheck_(user.email));
       default: return jsonResponse({ success: false, error: 'Unknown action' });
     }
   } catch (err) {
@@ -852,6 +853,61 @@ function rebuildTorItemList_(email) {
   try { sheet.autoResizeColumns(1, 3); } catch (e) {}
   if (email) logActivity_(email, 'tor-list', 'Rebuilt Item List for TOR', n + ' line(s)');
   return { success: true, count: n, sheet: TOR_LIST_SHEET_NAME };
+}
+
+function healthCheck_(email) {
+  var sheetOk = false;
+  var inboxOk = false;
+  var driveOk = false;
+  var sheetName = '';
+  var itemCount = 0;
+  var inboxPending = 0;
+  var sheetError = '';
+  var inboxError = '';
+  var driveError = '';
+
+  try {
+    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+    sheetName = sheet.getName();
+    itemCount = Math.max(0, sheet.getLastRow() - 1);
+    sheetOk = true;
+  } catch (e) {
+    sheetError = String(e.message || e);
+  }
+
+  try {
+    var inboxSheet = getInboxSheet_();
+    var data = inboxSheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][8] || 'pending') !== 'done') inboxPending++;
+    }
+    inboxOk = true;
+  } catch (e2) {
+    inboxError = String(e2.message || e2);
+  }
+
+  try {
+    DriveApp.getFolderById(DRIVE_FOLDER_ID).getName();
+    driveOk = true;
+  } catch (e3) {
+    driveError = String(e3.message || e3);
+  }
+
+  return {
+    success: true,
+    version: 'v28',
+    email: email || '',
+    sheetOk: sheetOk,
+    inboxOk: inboxOk,
+    driveOk: driveOk,
+    sheetName: sheetName,
+    itemCount: itemCount,
+    inboxPending: inboxPending,
+    sheetError: sheetError,
+    inboxError: inboxError,
+    driveError: driveError,
+    ok: sheetOk && inboxOk && driveOk
+  };
 }
 
 function jsonResponse(obj) {
