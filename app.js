@@ -1,7 +1,7 @@
 // ============ CONFIGURATION ============
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzvrhqxzR3oF5wX5DG_dcQ4F2lrDDrmpN8WLUzCPQj7XHGEazv12l67Z9q_OGOzm78zww/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v34';
+const APP_CACHE_NAME = 'tor-inventory-v35';
 const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
 const AI_GAP_MS = 1200;          // pause between AI calls to ease GAS load
 const AI_BACKOFF_MS = 6000;      // extra wait after timeout/quota-like errors
@@ -73,6 +73,7 @@ function bindEvents() {
   $('selectPhotosBtn').addEventListener('click', () => $('bulkPhotoInput').click());
   $('bulkPhotoInput').addEventListener('change', onPhotosSelected);
   $('clearQueueBtn').addEventListener('click', clearReviewQueue);
+  $('clearInboxBtn')?.addEventListener('click', confirmClearInbox);
   $('runAiBtn').addEventListener('click', runAiOnQueue);
   $('rebuildTorListBtn')?.addEventListener('click', rebuildTorList);
   $('runConnCheckBtn')?.addEventListener('click', runConnectionChecks);
@@ -897,6 +898,30 @@ function clearReviewQueue() {
   updateReviewToolbar();
 }
 
+function confirmClearInbox() {
+  if (reviewBusy) { showToast('Busy — wait for AI/submit to finish.', 'error'); return; }
+  openActionSheet(
+    [{ label: 'Clear Inbox (Sheet + pending photos)', value: 'clear', destructive: true }],
+    async (v) => { if (v === 'clear') await clearInboxOnServer(); }
+  );
+}
+
+async function clearInboxOnServer() {
+  try {
+    showToast('Clearing inbox on Sheet…', 'success');
+    const data = await apiCall({ action: 'inboxClear' }, 0);
+    // Drop inbox-backed cards; keep any local-only photos still in the list
+    reviewQueue = reviewQueue.filter((q) => !q.inboxId);
+    renderReviewQueue();
+    updateReviewToolbar();
+    const n = data.deleted || 0;
+    const f = data.trashedFiles || 0;
+    showToast(`Inbox cleared · Sheet ${n} row(s) · ${f} photo(s) trashed`, 'success');
+  } catch (err) {
+    showToast(err.message || 'Clear inbox failed', 'error');
+  }
+}
+
 function isGasLimitLikeError_(msg) {
   const s = String(msg || '');
   return /timed out|逾時|timeout|quota|rate limit|too many|Service invoked too many|Exceeded maximum|HTML page|Invalid server response|網路不穩|Network error|429|503/i.test(s);
@@ -1089,9 +1114,32 @@ function bindReviewCard(card) {
 
   card.querySelector('[data-action="remove"]')?.addEventListener('click', () => {
     if (reviewBusy) return;
-    reviewQueue = reviewQueue.filter((q) => q.id !== id);
-    renderReviewQueue();
-    updateReviewToolbar();
+    const removeLocal = () => {
+      reviewQueue = reviewQueue.filter((q) => q.id !== id);
+      renderReviewQueue();
+      updateReviewToolbar();
+    };
+    if (!item.inboxId) {
+      removeLocal();
+      return;
+    }
+    openActionSheet(
+      [{ label: 'Remove from Inbox + Sheet', value: 'remove', destructive: true }],
+      async (v) => {
+        if (v !== 'remove') return;
+        try {
+          await apiCall({ action: 'inboxDelete', inboxId: item.inboxId }, 0);
+          removeLocal();
+          showToast('Removed from Inbox / Sheet', 'success');
+        } catch (err) {
+          if (/not found/i.test(String(err.message || ''))) {
+            removeLocal();
+            return;
+          }
+          showToast(err.message || 'Could not remove from Sheet', 'error');
+        }
+      }
+    );
   });
 
   card.querySelector('[data-action="reai"]')?.addEventListener('click', async () => {

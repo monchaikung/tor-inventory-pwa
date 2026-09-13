@@ -19,7 +19,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v29' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v30' });
 }
 
 function doPost(e) {
@@ -43,6 +43,7 @@ function doPost(e) {
       case 'inboxList': return jsonResponse(inboxList_());
       case 'inboxAnalyze': return jsonResponse(inboxAnalyze_(body.inboxId));
       case 'inboxDelete': return jsonResponse(inboxDelete_(body.inboxId, user.email));
+      case 'inboxClear': return jsonResponse(inboxClear_(user.email));
       case 'rebuildTorList': return jsonResponse(rebuildTorItemList_(user.email));
       case 'health': return jsonResponse(healthCheck_(user.email));
       case 'logError': return jsonResponse(logClientError_(body, user.email));
@@ -739,6 +740,30 @@ function inboxDelete_(inboxId, email) {
   return { success: true };
 }
 
+/** Clear Pending Inbox sheet. Trash Drive only for non-done rows (done photos are still used by inventory). */
+function inboxClear_(email) {
+  const sheet = getInboxSheet_();
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return { success: true, deleted: 0, trashedFiles: 0 };
+
+  var deleted = 0;
+  var trashedFiles = 0;
+  for (var i = data.length - 1; i >= 1; i--) {
+    const status = String(data[i][8] || 'pending');
+    const fileId = String(data[i][4] || '');
+    if (status !== 'done' && fileId) {
+      try {
+        DriveApp.getFileById(fileId).setTrashed(true);
+        trashedFiles++;
+      } catch (e) {}
+    }
+    sheet.deleteRow(i + 1);
+    deleted++;
+  }
+  logActivity_(email, 'inbox', 'Cleared inbox', deleted + ' row(s), ' + trashedFiles + ' file(s) trashed');
+  return { success: true, deleted: deleted, trashedFiles: trashedFiles };
+}
+
 function sanitizeFilename_(str) {
   return String(str).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_').substring(0, 30);
 }
@@ -957,7 +982,7 @@ function healthCheck_(email) {
 
   return {
     success: true,
-    version: 'v29',
+    version: 'v30',
     email: email || '',
     sheetOk: sheetOk,
     inboxOk: inboxOk,
