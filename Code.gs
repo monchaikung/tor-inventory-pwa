@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v26' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v27' });
 }
 
 function doPost(e) {
@@ -855,6 +855,8 @@ function rebuildTorItemList_(email) {
 }
 
 function jsonResponse(obj) {
+  // TEXT (not JSON) avoids empty/HTML responses on some browsers after the
+  // script.google.com → googleusercontent.com redirect (CORS + Load Inbox fails).
   return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+    .setMimeType(ContentService.MimeType.TEXT);
 }
