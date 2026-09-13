@@ -2030,10 +2030,9 @@ function parseWeight(w) {
   const m = s.replace(/,/g, '').match(/[0-9]*\.?[0-9]+/);
   const n = m ? parseFloat(m[0]) : NaN;
   if (isNaN(n) || n <= 0) return 0;
-  if (/(?:kg|kgs|kilograms?|公斤|千克)/.test(s)) return n;
-  if (/(?:grams?|gram|克)/.test(s) || /[0-9.]+\s*g(?:\s|$)/.test(s) || /[0-9.]+\s*g$/.test(s)) return n / 1000;
-  // "200g" / "200 g" without matching above
-  if (/[0-9.]+\s*g\b/.test(s)) return n / 1000;
+  if (/kg|kilogram|公斤|千克/.test(s)) return n;
+  // "200 g", "200g", "200 grams", "200克"
+  if (/gram|克|[0-9.]+\s*g\b/.test(s)) return n / 1000;
   return n;
 }
 function fmtW(w) { return w > 0 ? `${w.toFixed(1)}kg` : '—'; }
