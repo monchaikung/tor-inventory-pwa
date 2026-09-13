@@ -1,7 +1,7 @@
 // ============ CONFIGURATION ============
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzvrhqxzR3oF5wX5DG_dcQ4F2lrDDrmpN8WLUzCPQj7XHGEazv12l67Z9q_OGOzm78zww/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v36';
+const APP_CACHE_NAME = 'tor-inventory-v37';
 const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
 const AI_GAP_MS = 1200;          // pause between AI calls to ease GAS load
 const AI_BACKOFF_MS = 6000;      // extra wait after timeout/quota-like errors
@@ -44,6 +44,11 @@ let selectedStatus = '待整理';
 let filterTransport = '';
 let filterStatus = '';
 let filterLocation = '';
+let photosMode = 'albums'; // albums | grid
+let photosAlbum = null; // { type, key, title }
+let photosSort = 'newest'; // newest | oldest | name | room
+let photosLightboxItems = [];
+let photosLightboxIndex = -1;
 let activityEntries = [];
 let openSwipeRow = null;
 
@@ -102,6 +107,23 @@ function bindEvents() {
 
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+  $('photosBackBtn')?.addEventListener('click', () => {
+    photosMode = 'albums';
+    photosAlbum = null;
+    renderPhotosScreen();
+    $('navTitle').textContent = 'Photos';
+  });
+  $('photosSortBtn')?.addEventListener('click', openPhotosSortSheet);
+  $('photoLightboxClose')?.addEventListener('click', closePhotoLightbox);
+  $('photoLightboxPrev')?.addEventListener('click', () => stepPhotoLightbox(-1));
+  $('photoLightboxNext')?.addEventListener('click', () => stepPhotoLightbox(1));
+  $('photoLightboxEdit')?.addEventListener('click', editFromPhotoLightbox);
+  document.addEventListener('keydown', (e) => {
+    if ($('photoLightbox')?.classList.contains('hidden')) return;
+    if (e.key === 'Escape') closePhotoLightbox();
+    if (e.key === 'ArrowLeft') stepPhotoLightbox(-1);
+    if (e.key === 'ArrowRight') stepPhotoLightbox(1);
   });
   document.querySelectorAll('#transportChips .ios-chip').forEach((chip) => {
     chip.addEventListener('click', () => {
@@ -1562,6 +1584,7 @@ async function loadAllItems() {
   renderBoxSummary();
   renderProgressBars();
   renderDashboard();
+  renderPhotosScreen();
 }
 
 async function loadActivityLog() {
@@ -2008,6 +2031,17 @@ function renderBoxSummary() {
   ).join('');
   container.innerHTML = html;
   container.querySelectorAll('.location-row').forEach((row) => {
+    row.querySelector('[data-photos]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const loc = row.dataset.location;
+      const isHand = row.dataset.transport === 'handcarry';
+      openPhotosAlbum({
+        type: isHand ? 'hand' : 'box',
+        key: loc,
+        title: isHand ? loc : `Box ${loc}`
+      });
+      switchTab('photos');
+    });
     row.addEventListener('click', () => {
       filterLocation = row.dataset.location;
       filterTransport = row.dataset.transport === 'handcarry' ? '手提' : '寄箱';
@@ -2020,7 +2054,14 @@ function renderBoxSummary() {
 }
 
 function locRow(title, b, location, transport) {
-  return `<div class="location-row" data-location="${esc(location)}" data-transport="${transport}"><div><div style="font-weight:500">${title}</div><div style="font-size:13px;color:#8E8E93;margin-top:2px">${b.items.length} items · ${b.packed} packed · ${fmtW(b.weight)}</div></div><span style="color:#8E8E93">›</span></div>`;
+  return `<div class="location-row" data-location="${esc(location)}" data-transport="${transport}">
+    <div class="location-row-main">
+      <div style="font-weight:500">${title}</div>
+      <div style="font-size:13px;color:#8E8E93;margin-top:2px">${b.items.length} items · ${b.packed} packed · ${fmtW(b.weight)}</div>
+    </div>
+    <button type="button" class="location-photos-btn" data-photos="1" title="Photos">🖼️</button>
+    <span style="color:#8E8E93">›</span>
+  </div>`;
 }
 
 /** Parse weight text to kilograms. Converts g/grams/克 → kg; bare numbers treated as kg. */
@@ -2037,6 +2078,262 @@ function parseWeight(w) {
 }
 function fmtW(w) { return w > 0 ? `${w.toFixed(1)}kg` : '—'; }
 
+
+// ============ PHOTOS (iPhone-style albums) ============
+function photoThumbUrl(item, size = 400) {
+  const link = String(item?.thumbUrl || item?.photoLink || '');
+  if (!link) return '';
+  if (/thumbnail|googleusercontent\.com\/thumbnail|\/thumbnail\?/.test(link)) return link;
+  const m = link.match(/\/d\/([^/]+)/) || link.match(/[?&]id=([^&]+)/) || link.match(/\/file\/d\/([^/]+)/);
+  if (m) return `https://drive.google.com/thumbnail?id=${encodeURIComponent(m[1])}&sz=w${size}`;
+  return link;
+}
+
+function photoFullUrl(item) {
+  const link = String(item?.photoLink || item?.thumbUrl || '');
+  if (!link) return '';
+  const m = link.match(/\/d\/([^/]+)/) || link.match(/[?&]id=([^&]+)/);
+  if (m) return `https://drive.google.com/thumbnail?id=${encodeURIComponent(m[1])}&sz=w2000`;
+  return link;
+}
+
+function itemsWithPhotoMeta() {
+  return (allItems || []).map((item, idx) => ({ item, idx, hasPhoto: !!(item.photoLink || item.thumbUrl) }));
+}
+
+function sortPhotoItems(list) {
+  const arr = list.slice();
+  const desc = (i) => String(i.itemDescription || i.description || '').toLowerCase();
+  const room = (i) => String(i.roomCategory || '').toLowerCase();
+  const ts = (i) => new Date(i.timestamp || i.captureTime || 0).getTime() || 0;
+  if (photosSort === 'oldest') arr.sort((a, b) => ts(a) - ts(b));
+  else if (photosSort === 'name') arr.sort((a, b) => desc(a).localeCompare(desc(b), 'en'));
+  else if (photosSort === 'room') arr.sort((a, b) => room(a).localeCompare(room(b), 'zh-Hant') || desc(a).localeCompare(desc(b), 'en'));
+  else arr.sort((a, b) => ts(b) - ts(a)); // newest
+  return arr;
+}
+
+function getPhotosAlbumItems(album) {
+  if (!album || album.type === 'all') return sortPhotoItems(allItems.slice());
+  if (album.type === 'box') {
+    return sortPhotoItems(allItems.filter((i) => i.transportMode !== '手提' && String(i.location || '') === String(album.key)));
+  }
+  if (album.type === 'hand') {
+    return sortPhotoItems(allItems.filter((i) => i.transportMode === '手提' && String(i.location || '') === String(album.key)));
+  }
+  if (album.type === 'nophoto') {
+    return sortPhotoItems(allItems.filter((i) => !(i.photoLink || i.thumbUrl)));
+  }
+  return [];
+}
+
+function albumCoverHtml(items) {
+  const withPhoto = items.filter((i) => i.photoLink || i.thumbUrl).slice(0, 4);
+  if (!withPhoto.length) {
+    return `<div class="photos-album-cover photos-album-cover-empty">📦</div>`;
+  }
+  if (withPhoto.length === 1) {
+    return `<div class="photos-album-cover"><img src="${esc(photoThumbUrl(withPhoto[0], 600))}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>`;
+  }
+  const cells = [0, 1, 2, 3].map((i) => {
+    const it = withPhoto[i];
+    if (!it) return `<div class="photos-mosaic-cell empty"></div>`;
+    return `<div class="photos-mosaic-cell"><img src="${esc(photoThumbUrl(it, 300))}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>`;
+  }).join('');
+  return `<div class="photos-album-cover photos-mosaic">${cells}</div>`;
+}
+
+function openPhotosAlbum(album) {
+  photosMode = 'grid';
+  photosAlbum = album;
+  $('navTitle').textContent = album.title || 'Photos';
+  renderPhotosScreen();
+}
+
+function openPhotosSortSheet() {
+  openActionSheet([
+    { label: 'Newest first · 最新', value: 'newest', selected: photosSort === 'newest' },
+    { label: 'Oldest first · 最舊', value: 'oldest', selected: photosSort === 'oldest' },
+    { label: 'Name · 名稱', value: 'name', selected: photosSort === 'name' },
+    { label: 'Room · 房間', value: 'room', selected: photosSort === 'room' }
+  ], (v) => {
+    photosSort = v;
+    renderPhotosScreen();
+  });
+}
+
+function renderPhotosScreen() {
+  const albumsView = $('photosAlbumsView');
+  const gridView = $('photosGridView');
+  if (!albumsView || !gridView) return;
+  if (photosMode === 'grid' && photosAlbum) {
+    albumsView.classList.add('hidden');
+    gridView.classList.remove('hidden');
+    renderPhotosGrid();
+  } else {
+    photosMode = 'albums';
+    albumsView.classList.remove('hidden');
+    gridView.classList.add('hidden');
+    renderPhotosAlbums();
+  }
+}
+
+function renderPhotosAlbums() {
+  const root = $('photosAlbums');
+  if (!root) return;
+  const shipped = {};
+  const hand = {};
+  HAND_CARRY_OPTIONS.forEach((o) => { hand[o.label] = []; });
+  allItems.forEach((item) => {
+    if (item.transportMode === '手提') {
+      const key = item.location || 'Unknown';
+      if (!hand[key]) hand[key] = [];
+      hand[key].push(item);
+    } else {
+      const key = item.location || 'Unknown';
+      if (!shipped[key]) shipped[key] = [];
+      shipped[key].push(item);
+    }
+  });
+  const all = allItems.slice();
+  const withPhotos = all.filter((i) => i.photoLink || i.thumbUrl);
+  const noPhotos = all.length - withPhotos.length;
+
+  let html = '';
+  html += `<p class="photos-section-title">資料庫 Library</p>`;
+  html += `<div class="photos-album-row">`;
+  html += photosAlbumCard({ type: 'all', key: 'all', title: 'All Photos' }, all, '🖼');
+  if (noPhotos > 0) {
+    html += photosAlbumCard({ type: 'nophoto', key: 'nophoto', title: 'No Photo' }, all.filter((i) => !(i.photoLink || i.thumbUrl)), '📄');
+  }
+  html += `</div>`;
+
+  html += `<p class="photos-section-title">箱子 Boxes</p>`;
+  const boxKeys = Object.keys(shipped).sort((a, b) => {
+    const na = parseFloat(a), nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return String(a).localeCompare(String(b), 'en', { numeric: true });
+  });
+  if (!boxKeys.length) {
+    html += `<div class="empty-state" style="padding:12px 16px">No boxes yet.</div>`;
+  } else {
+    html += `<div class="photos-album-row">`;
+    html += boxKeys.map((k) => photosAlbumCard({ type: 'box', key: k, title: `Box ${k}` }, shipped[k], '📦')).join('');
+    html += `</div>`;
+  }
+
+  html += `<p class="photos-section-title">手提 Hand Carry</p>`;
+  html += `<div class="photos-album-row">`;
+  html += HAND_CARRY_OPTIONS.map((o) =>
+    photosAlbumCard({ type: 'hand', key: o.label, title: o.label }, hand[o.label] || [], o.icon || '🎒')
+  ).join('');
+  // any extra hand locations
+  Object.keys(hand).filter((k) => !HAND_CARRY_OPTIONS.some((o) => o.label === k)).sort().forEach((k) => {
+    html += photosAlbumCard({ type: 'hand', key: k, title: k }, hand[k], '🎒');
+  });
+  html += `</div>`;
+
+  root.innerHTML = html;
+  root.querySelectorAll('[data-album]').forEach((el) => {
+    el.addEventListener('click', () => {
+      openPhotosAlbum({
+        type: el.dataset.type,
+        key: el.dataset.key,
+        title: el.dataset.title
+      });
+    });
+  });
+}
+
+function photosAlbumCard(album, items, emoji) {
+  const count = items.length;
+  const photoCount = items.filter((i) => i.photoLink || i.thumbUrl).length;
+  return `<button type="button" class="photos-album-card" data-album="1" data-type="${esc(album.type)}" data-key="${esc(album.key)}" data-title="${esc(album.title)}">
+    ${albumCoverHtml(items)}
+    <div class="photos-album-meta">
+      <div class="photos-album-name">${emoji} ${esc(album.title)}</div>
+      <div class="photos-album-count">${count} items · ${photoCount} photos</div>
+    </div>
+  </button>`;
+}
+
+function renderPhotosGrid() {
+  const grid = $('photosGrid');
+  if (!grid || !photosAlbum) return;
+  const items = getPhotosAlbumItems(photosAlbum);
+  $('photosGridTitle').textContent = photosAlbum.title || 'Photos';
+  $('photosGridSub').textContent = `${items.length} items · sort: ${photosSort}`;
+  if (!items.length) {
+    grid.innerHTML = '<div class="empty-state" style="padding:24px">No items in this album.</div>';
+    return;
+  }
+  grid.innerHTML = items.map((item, i) => {
+    const thumb = photoThumbUrl(item, 400);
+    const label = esc(item.itemDescription || 'Item');
+    const sub = esc([item.location ? (item.transportMode === '手提' ? item.location : `Box ${item.location}`) : '', item.roomCategory || ''].filter(Boolean).join(' · '));
+    const body = thumb
+      ? `<img src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+      : `<div class="photos-grid-placeholder">📄</div>`;
+    return `<button type="button" class="photos-grid-cell" data-idx="${i}">${body}<span class="photos-grid-label">${label}</span><span class="photos-grid-sub">${sub}</span></button>`;
+  }).join('');
+  grid.querySelectorAll('.photos-grid-cell').forEach((btn) => {
+    btn.addEventListener('click', () => openPhotoLightbox(items, Number(btn.dataset.idx)));
+  });
+}
+
+function openPhotoLightbox(items, index) {
+  photosLightboxItems = items;
+  photosLightboxIndex = index;
+  const lb = $('photoLightbox');
+  if (!lb) return;
+  lb.classList.remove('hidden');
+  lb.setAttribute('aria-hidden', 'false');
+  renderPhotoLightbox();
+}
+
+function closePhotoLightbox() {
+  const lb = $('photoLightbox');
+  if (!lb) return;
+  lb.classList.add('hidden');
+  lb.setAttribute('aria-hidden', 'true');
+  photosLightboxIndex = -1;
+  photosLightboxItems = [];
+}
+
+function stepPhotoLightbox(delta) {
+  if (!photosLightboxItems.length) return;
+  photosLightboxIndex = (photosLightboxIndex + delta + photosLightboxItems.length) % photosLightboxItems.length;
+  renderPhotoLightbox();
+}
+
+function renderPhotoLightbox() {
+  const item = photosLightboxItems[photosLightboxIndex];
+  if (!item) return;
+  const img = $('photoLightboxImg');
+  const url = photoFullUrl(item) || photoThumbUrl(item, 1200);
+  if (url) {
+    img.src = url;
+    img.style.display = '';
+  } else {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  const box = item.transportMode === '手提'
+    ? (item.location || 'Hand carry')
+    : (item.location ? `Box ${item.location}` : '');
+  $('photoLightboxCaption').textContent = [item.itemDescription || 'Item', box, item.roomCategory || ''].filter(Boolean).join(' · ');
+  $('photoLightboxCounter').textContent = `${photosLightboxIndex + 1} / ${photosLightboxItems.length}`;
+}
+
+function editFromPhotoLightbox() {
+  const item = photosLightboxItems[photosLightboxIndex];
+  if (!item) return;
+  closePhotoLightbox();
+  if (typeof startEditItem === 'function') startEditItem(item);
+  else if (typeof editItem === 'function') editItem(item);
+}
+
+
 function switchTab(tab) {
   closeOpenSwipe();
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
@@ -2046,6 +2343,7 @@ function switchTab(tab) {
     review: 'Review',
     edit: 'Edit Item',
     items: 'Inventory',
+    photos: 'Photos',
     boxes: 'Boxes',
     dashboard: 'Dashboard'
   };
@@ -2058,6 +2356,12 @@ function switchTab(tab) {
   if (tab === 'review') $('screenReview').classList.add('active');
   if (tab === 'edit') $('screenEdit').classList.add('active');
   if (tab === 'items') { $('screenItems').classList.add('active'); renderFilteredList(); }
+  if (tab === 'photos') {
+    $('screenPhotos').classList.add('active');
+    if (photosMode === 'albums') $('navTitle').textContent = 'Photos';
+    else $('navTitle').textContent = photosAlbum?.title || 'Photos';
+    renderPhotosScreen();
+  }
   if (tab === 'boxes') { $('screenBoxes').classList.add('active'); renderBoxSummary(); renderProgressBars(); }
   if (tab === 'dashboard') {
     $('screenDashboard').classList.add('active');
