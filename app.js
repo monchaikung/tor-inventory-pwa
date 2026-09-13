@@ -1,7 +1,7 @@
 // ============ CONFIGURATION ============
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzvrhqxzR3oF5wX5DG_dcQ4F2lrDDrmpN8WLUzCPQj7XHGEazv12l67Z9q_OGOzm78zww/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v37';
+const APP_CACHE_NAME = 'tor-inventory-v38';
 const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
 const AI_GAP_MS = 1200;          // pause between AI calls to ease GAS load
 const AI_BACKOFF_MS = 6000;      // extra wait after timeout/quota-like errors
@@ -1834,9 +1834,8 @@ function getItemTypeEmoji(item) {
 
 function renderItemThumb(item) {
   const emoji = getItemTypeEmoji(item);
-  if (item.photoLink) {
-    const link = esc(item.photoLink);
-    return `<div class="item-thumb-wrap"><img class="item-thumb" src="${link}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="item-thumb item-thumb-emoji" style="display:none" aria-hidden="true">${emoji}</div></div>`;
+  if (item.photoLink || item.thumbUrl) {
+    return `<div class="item-thumb-wrap">${photoImgHtml(item, 200, 'item-thumb')}<div class="item-thumb item-thumb-emoji" style="display:none" aria-hidden="true">${emoji}</div></div>`;
   }
   return `<div class="item-thumb item-thumb-emoji" aria-hidden="true">${emoji}</div>`;
 }
@@ -2080,21 +2079,73 @@ function fmtW(w) { return w > 0 ? `${w.toFixed(1)}kg` : '—'; }
 
 
 // ============ PHOTOS (iPhone-style albums) ============
+function driveFileId(link) {
+  const s = String(link || '');
+  if (!s) return '';
+  const m = s.match(/\/d\/([^/]+)/) || s.match(/[?&]id=([^&]+)/) || s.match(/\/file\/d\/([^/]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+/**
+ * iPhone Safari often cannot render drive.google.com/file/.../view as <img>,
+ * and drive thumbnail + referrerpolicy=no-referrer also fails. Prefer lh3/uc.
+ */
+function photoUrlCandidates(item, size = 400) {
+  const primary = String(item?.thumbUrl || item?.photoLink || '');
+  const secondary = String(item?.photoLink || '');
+  const id = driveFileId(primary) || driveFileId(secondary);
+  const urls = [];
+  if (id) {
+    urls.push(`https://lh3.googleusercontent.com/d/${encodeURIComponent(id)}=w${size}`);
+    urls.push(`https://drive.google.com/uc?export=view&id=${encodeURIComponent(id)}`);
+    urls.push(`https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w${size}`);
+  }
+  for (const link of [primary, secondary]) {
+    if (!link) continue;
+    if (/\/file\/d\/|\/view(\?|$)/i.test(link)) continue;
+    urls.push(link);
+  }
+  return [...new Set(urls.filter(Boolean))];
+}
+
 function photoThumbUrl(item, size = 400) {
-  const link = String(item?.thumbUrl || item?.photoLink || '');
-  if (!link) return '';
-  if (/thumbnail|googleusercontent\.com\/thumbnail|\/thumbnail\?/.test(link)) return link;
-  const m = link.match(/\/d\/([^/]+)/) || link.match(/[?&]id=([^&]+)/) || link.match(/\/file\/d\/([^/]+)/);
-  if (m) return `https://drive.google.com/thumbnail?id=${encodeURIComponent(m[1])}&sz=w${size}`;
-  return link;
+  return photoUrlCandidates(item, size)[0] || '';
 }
 
 function photoFullUrl(item) {
-  const link = String(item?.photoLink || item?.thumbUrl || '');
-  if (!link) return '';
-  const m = link.match(/\/d\/([^/]+)/) || link.match(/[?&]id=([^&]+)/);
-  if (m) return `https://drive.google.com/thumbnail?id=${encodeURIComponent(m[1])}&sz=w2000`;
-  return link;
+  return photoUrlCandidates(item, 2000)[0] || '';
+}
+
+function photoImgHtml(item, size, className) {
+  const urls = photoUrlCandidates(item, size);
+  if (!urls.length) {
+    return `<div class="${className} photos-img-fallback" aria-hidden="true">📷</div>`;
+  }
+  const rest = urls.slice(1).map((u) => encodeURIComponent(u)).join(' ');
+  const cls = className ? ` class="${className}"` : '';
+  return `<img${cls} src="${esc(urls[0])}" alt="" loading="lazy" decoding="async" data-fallback-urls="${rest}" onerror="photoImgError(this)">`;
+}
+
+function photoImgError(img) {
+  const raw = String(img.dataset.fallbackUrls || '').trim();
+  const next = raw ? raw.split(/\s+/).filter(Boolean) : [];
+  if (next.length) {
+    img.dataset.fallbackUrls = next.slice(1).join(' ');
+    img.src = decodeURIComponent(next[0]);
+    return;
+  }
+  img.onerror = null;
+  const sibling = img.nextElementSibling;
+  if (sibling && sibling.classList.contains('item-thumb-emoji')) {
+    img.style.display = 'none';
+    sibling.style.display = 'flex';
+    return;
+  }
+  const ph = document.createElement('div');
+  ph.className = `${img.className || ''} photos-img-fallback`.trim();
+  ph.setAttribute('aria-hidden', 'true');
+  ph.textContent = '📷';
+  img.replaceWith(ph);
 }
 
 function itemsWithPhotoMeta() {
@@ -2133,12 +2184,12 @@ function albumCoverHtml(items) {
     return `<div class="photos-album-cover photos-album-cover-empty">📦</div>`;
   }
   if (withPhoto.length === 1) {
-    return `<div class="photos-album-cover"><img src="${esc(photoThumbUrl(withPhoto[0], 600))}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>`;
+    return `<div class="photos-album-cover">${photoImgHtml(withPhoto[0], 600, '')}</div>`;
   }
   const cells = [0, 1, 2, 3].map((i) => {
     const it = withPhoto[i];
     if (!it) return `<div class="photos-mosaic-cell empty"></div>`;
-    return `<div class="photos-mosaic-cell"><img src="${esc(photoThumbUrl(it, 300))}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>`;
+    return `<div class="photos-mosaic-cell">${photoImgHtml(it, 300, '')}</div>`;
   }).join('');
   return `<div class="photos-album-cover photos-mosaic">${cells}</div>`;
 }
@@ -2268,12 +2319,11 @@ function renderPhotosGrid() {
     return;
   }
   grid.innerHTML = items.map((item, i) => {
-    const thumb = photoThumbUrl(item, 400);
     const label = esc(item.itemDescription || 'Item');
     const sub = esc([item.location ? (item.transportMode === '手提' ? item.location : `Box ${item.location}`) : '', item.roomCategory || ''].filter(Boolean).join(' · '));
-    const body = thumb
-      ? `<img src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
-      : `<div class="photos-grid-placeholder">📄</div>`;
+    const body = (item.photoLink || item.thumbUrl)
+      ? photoImgHtml(item, 400, '')
+      : `<div class="photos-grid-placeholder">📷</div>`;
     return `<button type="button" class="photos-grid-cell" data-idx="${i}">${body}<span class="photos-grid-label">${label}</span><span class="photos-grid-sub">${sub}</span></button>`;
   }).join('');
   grid.querySelectorAll('.photos-grid-cell').forEach((btn) => {
@@ -2310,12 +2360,16 @@ function renderPhotoLightbox() {
   const item = photosLightboxItems[photosLightboxIndex];
   if (!item) return;
   const img = $('photoLightboxImg');
-  const url = photoFullUrl(item) || photoThumbUrl(item, 1200);
-  if (url) {
-    img.src = url;
+  const urls = photoUrlCandidates(item, 2000);
+  img.onerror = null;
+  if (urls.length) {
+    img.dataset.fallbackUrls = urls.slice(1).map((u) => encodeURIComponent(u)).join(' ');
+    img.onerror = () => photoImgError(img);
+    img.src = urls[0];
     img.style.display = '';
   } else {
     img.removeAttribute('src');
+    img.removeAttribute('data-fallback-urls');
     img.style.display = 'none';
   }
   const box = item.transportMode === '手提'
