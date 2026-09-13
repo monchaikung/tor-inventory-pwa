@@ -1594,6 +1594,7 @@ async function runConnectionChecks() {
     };
   } catch (err) {
     rows[1] = { name: '2. GAS public ping', state: 'fail', detail: err.message || 'GAS unreachable' };
+    noteGasLimitWarning_(err.message || '');
   }
   setConnStatusRows_(rows);
 
@@ -1603,6 +1604,7 @@ async function runConnectionChecks() {
     rows[2] = { name: '3. Google sign-in', state: 'fail', detail: 'Not signed in' };
     rows[3] = { name: '4. GAS + Sheet / Drive / Inbox', state: 'fail', detail: 'Sign in first' };
     setConnStatusRows_(rows);
+    renderGasLimitBanner_();
     if (btn) btn.disabled = false;
     return;
   }
@@ -1623,14 +1625,17 @@ async function runConnectionChecks() {
       state: health.ok ? 'ok' : 'fail',
       detail: parts.join(' · ')
     };
+    if (health.ok) clearGasLimitWarning_();
   } catch (err) {
     rows[3] = {
       name: '4. GAS + Sheet / Drive / Inbox',
       state: 'fail',
       detail: err.message || 'Authenticated GAS call failed'
     };
+    noteGasLimitWarning_(err.message || '');
   }
   setConnStatusRows_(rows);
+  renderGasLimitBanner_();
   if (btn) btn.disabled = false;
 
   const failed = rows.filter((r) => r.state === 'fail').length;
