@@ -1,7 +1,7 @@
 // ============ CONFIGURATION ============
-const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwpQjBvagza2ITagHh66NDTxe4vMhtiAOR2pywBkKAdaQ7pZbihBg29IihgdzfyR2g_qA/exec';
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyOy2Ock7nEv6jPevdzhk_KNkCMetLFBX8anQ-PYKq3TOaMCnVcB3XKTndDfbDBZvsFjg/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v31';
+const APP_CACHE_NAME = 'tor-inventory-v32';
 const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
 
 const HAND_CARRY_OPTIONS = [
