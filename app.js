@@ -278,8 +278,19 @@ async function apiCall(payload, retries = 2) {
       });
       const raw = await res.text();
       let data;
-      try { data = JSON.parse(raw); } catch {
-        throw new Error('Invalid server response. Check GAS deployment URL.');
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        const snippet = String(raw || '').replace(/\s+/g, ' ').slice(0, 120);
+        if (!raw || /<!DOCTYPE|<html/i.test(raw)) {
+          throw new Error(
+            'GAS returned a login/HTML page. Redeploy web app with access「任何人 / Anyone」, then soft-refresh. 請將部署權限設為「任何人」後再試。'
+          );
+        }
+        throw new Error(
+          'Invalid server response. Check GAS deployment URL.' +
+          (snippet ? ` (${snippet})` : '')
+        );
       }
       if (!data.success) {
         if (data.error?.includes('denied')) {
