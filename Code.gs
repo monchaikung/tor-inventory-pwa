@@ -19,7 +19,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v31' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v32' });
 }
 
 function doPost(e) {
@@ -809,7 +809,8 @@ function searchItems_(query) {
   }
 
   items.sort(function(a, b) { return new Date(b.timestamp) - new Date(a.timestamp); });
-  return { success: true, items: items.slice(0, 200), count: items.length };
+  // Return all rows — a 200 cap hid older boxes (e.g. Box 1–3) once inventory grew past 200.
+  return { success: true, items: items, count: items.length };
 }
 
 function updateStatus_(timestamp, status, email) {
@@ -992,7 +993,7 @@ function healthCheck_(email) {
 
   return {
     success: true,
-    version: 'v31',
+    version: 'v32',
     email: email || '',
     sheetOk: sheetOk,
     inboxOk: inboxOk,

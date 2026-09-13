@@ -1,7 +1,7 @@
 // ============ CONFIGURATION ============
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzvrhqxzR3oF5wX5DG_dcQ4F2lrDDrmpN8WLUzCPQj7XHGEazv12l67Z9q_OGOzm78zww/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v38';
+const APP_CACHE_NAME = 'tor-inventory-v39';
 const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
 const AI_GAP_MS = 1200;          // pause between AI calls to ease GAS load
 const AI_BACKOFF_MS = 6000;      // extra wait after timeout/quota-like errors
@@ -1568,11 +1568,29 @@ async function saveEditItem() {
   }
 }
 
+
+/** Normalize Sheet-sourced fields (Location numbers, spacing). */
+function normalizeItemFields(item) {
+  const out = { ...item };
+  let loc = String(out.location ?? '').trim();
+  // "1.0" from some exports → "1"
+  if (/^\d+\.0$/.test(loc)) loc = loc.slice(0, -2);
+  out.location = loc;
+  out.transportMode = String(out.transportMode || '').trim();
+  out.status = String(out.status || '').trim();
+  out.itemDescription = String(out.itemDescription || '').trim();
+  out.roomCategory = String(out.roomCategory || '').trim();
+  return out;
+}
+
 async function loadAllItems() {
   try {
     const data = await apiCall({ action: 'search', query: '' });
-    allItems = data.items || [];
+    allItems = (data.items || []).map(normalizeItemFields);
     localStorage.setItem('torItems', JSON.stringify(allItems));
+    if (typeof data.count === 'number' && data.count > allItems.length) {
+      showToast(`Loaded ${allItems.length} of ${data.count} items (server truncated).`, 'error');
+    }
   } catch (err) {
     const cached = localStorage.getItem('torItems');
     if (cached) {
@@ -2020,7 +2038,11 @@ function renderBoxSummary() {
     bucket[key].weight += parseWeight(item.weight);
   });
   let html = '<p class="location-section-title">寄箱 Shipped</p>';
-  const boxKeys = Object.keys(shipped).sort();
+  const boxKeys = Object.keys(shipped).sort((a, b) => {
+    const na = Number(a), nb = Number(b);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+    return String(a).localeCompare(String(b), 'en', { numeric: true });
+  });
   html += boxKeys.length
     ? boxKeys.map((k) => locRow(`📦 Box ${k}`, shipped[k], k, 'shipped')).join('')
     : '<div class="empty-state" style="padding:16px">No shipped items yet.</div>';
