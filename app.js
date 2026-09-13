@@ -1,7 +1,8 @@
 // ============ CONFIGURATION ============
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwpQjBvagza2ITagHh66NDTxe4vMhtiAOR2pywBkKAdaQ7pZbihBg29IihgdzfyR2g_qA/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v30';
+const APP_CACHE_NAME = 'tor-inventory-v31';
+const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
 
 const HAND_CARRY_OPTIONS = [
   { id: 'personal-bag', label: '隨身背囊', sub: 'Personal Item', icon: '🎒' },
@@ -258,6 +259,7 @@ async function apiCall(payload, retries = 2) {
   const hasImage = !!payload.image;
   const isAi = payload.action === 'analyze' || payload.action === 'inboxAnalyze';
   const isSave = payload.action === 'save';
+  const isLog = payload.action === 'logError';
   // Inbox AI: Drive fetch + Gemini can exceed 45s (esp. model fallback).
   // Save can be slow (Drive photo link + Sheet write); avoid short 35s cut-off.
   const timeoutMs = isAi ? 120000
@@ -265,6 +267,7 @@ async function apiCall(payload, retries = 2) {
   if (isAi) retries = 1;
   // Never auto-retry save — a timed-out write may already have succeeded (duplicates).
   if (isSave) retries = 0;
+  if (isLog) retries = 0;
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -283,16 +286,18 @@ async function apiCall(payload, retries = 2) {
       try {
         data = JSON.parse(raw);
       } catch {
-        const snippet = String(raw || '').replace(/\s+/g, ' ').slice(0, 120);
+        const snippet = String(raw || '').replace(/\s+/g, ' ').slice(0, 160);
+        let errMsg;
         if (!raw || /<!DOCTYPE|<html/i.test(raw)) {
-          throw new Error(
-            'GAS returned a login/HTML page. Redeploy web app with access「任何人 / Anyone」, then soft-refresh. 請將部署權限設為「任何人」後再試。'
-          );
+          errMsg = 'GAS returned a login/HTML page. Redeploy web app with access「任何人 / Anyone」, then soft-refresh. 請將部署權限設為「任何人」後再試。';
+        } else {
+          errMsg = 'Invalid server response. Check GAS deployment URL.' +
+            (snippet ? ` (${snippet})` : '');
         }
-        throw new Error(
-          'Invalid server response. Check GAS deployment URL.' +
-          (snippet ? ` (${snippet})` : '')
-        );
+        if (!isLog) {
+          queueSyslogError_('client', errMsg, `action=${payload.action || '?'} status=${res.status} body=${snippet}`);
+        }
+        throw new Error(errMsg);
       }
       if (!data.success) {
         if (data.error?.includes('denied')) {
@@ -300,8 +305,12 @@ async function apiCall(payload, retries = 2) {
           $('loginError').classList.remove('hidden');
           signOut();
         }
+        if (!isLog) {
+          queueSyslogError_('client', data.error || 'Request failed', `action=${payload.action || '?'}`);
+        }
         throw new Error(data.error || 'Request failed');
       }
+      if (!isLog) flushSyslogQueue_();
       return data;
     } catch (err) {
       lastErr = err;
@@ -309,7 +318,9 @@ async function apiCall(payload, retries = 2) {
       const aborted = err.name === 'AbortError' || /aborted/i.test(msg);
       if (aborted) {
         if (isAi) {
-          throw new Error('AI timed out. Tap Re-run AI (Wi‑Fi). AI 逾時，請再撳 Re-run AI。');
+          const tMsg = 'AI timed out. Tap Re-run AI (Wi‑Fi). AI 逾時，請再撳 Re-run AI。';
+          if (!isLog) queueSyslogError_('client', tMsg, `action=${payload.action || '?'}`);
+          throw new Error(tMsg);
         }
         if (isSave) {
           throw new Error('Submit timed out. Checking if it already saved… 提交逾時，檢查是否已寫入…');
@@ -328,9 +339,104 @@ async function apiCall(payload, retries = 2) {
 
   const msg = String(lastErr?.message || lastErr || 'Request failed');
   if (/load failed|failed to fetch|networkerror|network request failed/i.test(msg)) {
+    if (!isLog) queueSyslogError_('client', 'Network error', `action=${payload.action || '?'}`);
     throw new Error('Network error. Check Wi-Fi. 網路不穩。');
   }
   throw lastErr;
+}
+
+function readLocalSyslogQueue_() {
+  try {
+    return JSON.parse(localStorage.getItem(LOCAL_SYSLOG_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalSyslogQueue_(arr) {
+  try {
+    localStorage.setItem(LOCAL_SYSLOG_KEY, JSON.stringify((arr || []).slice(-40)));
+  } catch { /* ignore */ }
+}
+
+function queueSyslogError_(source, message, detail) {
+  const q = readLocalSyslogQueue_();
+  q.push({
+    ts: new Date().toISOString(),
+    level: 'error',
+    source: source || 'client',
+    message: String(message || '').slice(0, 500),
+    detail: String(detail || '').slice(0, 1000),
+    pending: true
+  });
+  writeLocalSyslogQueue_(q);
+  renderLocalSyslogHint_();
+}
+
+async function flushSyslogQueue_() {
+  const token = getIdToken();
+  if (!token) return;
+  const q = readLocalSyslogQueue_();
+  const pending = q.filter((e) => e.pending);
+  if (!pending.length) return;
+  const remain = q.filter((e) => !e.pending);
+  for (const entry of pending) {
+    try {
+      await apiCall({
+        action: 'logError',
+        level: entry.level || 'error',
+        source: entry.source || 'client',
+        message: entry.message,
+        detail: entry.detail
+      }, 0);
+    } catch {
+      remain.push(entry);
+    }
+  }
+  writeLocalSyslogQueue_(remain);
+  renderLocalSyslogHint_();
+}
+
+function renderLocalSyslogHint_() {
+  const el = $('syslogLocalHint');
+  if (!el) return;
+  const pending = readLocalSyslogQueue_().filter((e) => e.pending).length;
+  el.textContent = pending
+    ? `${pending} local error(s) waiting to sync to Sheet「Syslog」`
+    : '';
+}
+
+async function loadSyslog() {
+  const container = $('syslogList');
+  if (!container) return;
+  container.innerHTML = '<p class="activity-loading">Loading syslog…</p>';
+  renderLocalSyslogHint_();
+  try {
+    await flushSyslogQueue_();
+    const data = await apiCall({ action: 'syslog' }, 0);
+    const entries = data.entries || [];
+    const local = readLocalSyslogQueue_().filter((e) => e.pending);
+    if (!entries.length && !local.length) {
+      container.innerHTML = '<p class="activity-empty">No errors in Syslog.</p>';
+      return;
+    }
+    const localHtml = local.map((e) =>
+      `<div class="conn-row fail"><span class="conn-icon">⏳</span><div class="conn-body"><div class="conn-name">${esc(e.message)}</div><div class="conn-detail">local · ${esc(e.source)} · ${esc(e.detail || '')}</div></div></div>`
+    ).join('');
+    const remoteHtml = entries.map((e) =>
+      `<div class="conn-row fail"><span class="conn-icon">❌</span><div class="conn-body"><div class="conn-name">${esc(e.message)}</div><div class="conn-detail">${esc(e.source)} · ${esc(formatRelativeTime(e.timestamp))} · ${esc(e.detail || '')}</div></div></div>`
+    ).join('');
+    container.innerHTML = localHtml + remoteHtml;
+  } catch (err) {
+    const local = readLocalSyslogQueue_();
+    if (local.length) {
+      container.innerHTML = local.slice().reverse().map((e) =>
+        `<div class="conn-row fail"><span class="conn-icon">❌</span><div class="conn-body"><div class="conn-name">${esc(e.message)}</div><div class="conn-detail">local only · ${esc(e.detail || '')}</div></div></div>`
+      ).join('');
+    } else {
+      container.innerHTML = `<p class="activity-empty">${esc(err.message || 'Could not load syslog.')}</p>`;
+    }
+  }
 }
 
 // ============ REVIEW QUEUE ============
@@ -1821,6 +1927,7 @@ function switchTab(tab) {
     renderDashboard();
     loadActivityLog();
     runConnectionChecks();
+    loadSyslog();
   }
 }
 
