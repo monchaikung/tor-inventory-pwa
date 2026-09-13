@@ -18,7 +18,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v25' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v26' });
 }
 
 function doPost(e) {
@@ -442,6 +442,20 @@ function logAppOpen_(client, email) {
 }
 
 function saveItem_(body, email) {
+  // Idempotent: if this inbox photo was already submitted, do not append a duplicate row.
+  // (Client may time out after Sheet write succeeds, then retry Submit.)
+  if (body.inboxId) {
+    const existing = findInboxRow_(body.inboxId);
+    if (existing && String(existing.data[8] || '') === 'done') {
+      return {
+        success: true,
+        alreadySaved: true,
+        photoLink: String(existing.data[3] || body.photoLink || ''),
+        timestamp: ''
+      };
+    }
+  }
+
   const status = isValidStatus_(body.status) ? body.status : '待整理';
   const timestamp = new Date().toISOString();
   var photoLink = '';
@@ -471,7 +485,8 @@ function saveItem_(body, email) {
   ]);
   if (body.inboxId) markInboxDone_(body.inboxId);
   logActivity_(email, 'added', desc, (body.location || '') + ' · ' + status);
-  try { rebuildTorItemList_(email); } catch (e) {}
+  // Do NOT rebuild TOR list here — each save used to rebuild and often timed out
+  // after the row was already written. Client rebuilds once after the batch.
   return { success: true, photoLink: photoLink, timestamp: timestamp };
 }
 

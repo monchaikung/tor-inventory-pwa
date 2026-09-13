@@ -255,10 +255,14 @@ async function apiCall(payload, retries = 2) {
 
   const hasImage = !!payload.image;
   const isAi = payload.action === 'analyze' || payload.action === 'inboxAnalyze';
+  const isSave = payload.action === 'save';
   // Inbox AI: Drive fetch + Gemini can exceed 45s (esp. model fallback).
+  // Save can be slow (Drive photo link + Sheet write); avoid short 35s cut-off.
   const timeoutMs = isAi ? 120000
-    : (payload.action === 'inboxUpload' || hasImage) ? 90000 : 35000;
+    : (payload.action === 'inboxUpload' || hasImage || isSave) ? 90000 : 35000;
   if (isAi) retries = 1;
+  // Never auto-retry save — a timed-out write may already have succeeded (duplicates).
+  if (isSave) retries = 0;
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -293,6 +297,9 @@ async function apiCall(payload, retries = 2) {
       if (aborted) {
         if (isAi) {
           throw new Error('AI timed out. Tap Re-run AI (Wi‑Fi). AI 逾時，請再撳 Re-run AI。');
+        }
+        if (isSave) {
+          throw new Error('Submit timed out. Checking if it already saved… 提交逾時，檢查是否已寫入…');
         }
         throw new Error(hasImage
           ? 'Timed out. Try Wi‑Fi or a smaller photo. 逾時，請用 Wi‑Fi 或較細相片。'
@@ -1116,11 +1123,21 @@ async function submitReadyItems() {
       if (!payload.image && !payload.inboxId) throw new Error('Missing photo');
       await apiCall(payload);
       item.state = 'done';
+      item.error = '';
       okCount++;
     } catch (err) {
-      item.state = 'ready';
-      item.error = err.message || 'Submit failed';
-      failCount++;
+      // Sheet write often succeeds before the HTTP response returns. If this was an
+      // inbox item and it is no longer pending, treat as submitted (avoid duplicates).
+      const recovered = await recoverSubmitAfterTimeout_(item, err);
+      if (recovered) {
+        item.state = 'done';
+        item.error = '';
+        okCount++;
+      } else {
+        item.state = 'ready';
+        item.error = err.message || 'Submit failed';
+        failCount++;
+      }
     }
     renderReviewQueue();
     updateReviewToolbar();
@@ -1134,6 +1151,23 @@ async function submitReadyItems() {
   }
   if (failCount) showToast(`Submitted ${okCount}, failed ${failCount}`, 'error');
   else showToast(`Submitted ${okCount} item(s) · TOR list updated`, 'success');
+}
+
+async function recoverSubmitAfterTimeout_(item, err) {
+  if (!item?.inboxId) return false;
+  const msg = String(err?.message || err || '');
+  const maybeSaved = /timed out|逾時|timeout|逾時/i.test(msg)
+    || /network|fetch|load failed/i.test(msg);
+  if (!maybeSaved) return false;
+  try {
+    const data = await apiCall({ action: 'inboxList' }, 0);
+    const stillPending = (data.items || []).some(
+      (it) => String(it.inboxId) === String(item.inboxId)
+    );
+    return !stillPending;
+  } catch (e) {
+    return false;
+  }
 }
 
 // ============ EDIT EXISTING ============
