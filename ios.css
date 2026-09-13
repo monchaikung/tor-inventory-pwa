@@ -948,6 +948,78 @@ html, body {
   text-align: center;
 }
 
+.conn-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.conn-head .ios-btn-secondary {
+  width: auto;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 8px 12px;
+  height: auto;
+  font-size: 14px;
+}
+
+.conn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.conn-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-bottom: 0.5px solid var(--ios-separator, #C6C6C8);
+}
+
+.conn-row:last-child { border-bottom: none; padding-bottom: 0; }
+.conn-row:first-child { padding-top: 0; }
+
+.conn-icon {
+  width: 22px;
+  text-align: center;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.conn-body { flex: 1; min-width: 0; }
+
+.conn-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ios-label, #000);
+}
+
+.conn-detail {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ios-label-secondary, #8E8E93);
+  word-break: break-word;
+}
+
+.conn-row.ok .conn-name { color: #1B7F3A; }
+.conn-row.fail .conn-name { color: #FF3B30; }
+.conn-row.run .conn-name { color: var(--ios-blue, #007AFF); }
+
+.gas-limit-banner {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #FFF4E5;
+  color: #9A5B00;
+  font-size: 13px;
+  line-height: 1.4;
+  border: 1px solid #FFD59A;
+}
+.gas-limit-banner.hidden { display: none; }
+
 .tab-btn { font-size: 9px; }
 
 /* Desktop review queue */

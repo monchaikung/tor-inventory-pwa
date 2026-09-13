@@ -1,6 +1,12 @@
 // ============ CONFIGURATION ============
-const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwpQjBvagza2ITagHh66NDTxe4vMhtiAOR2pywBkKAdaQ7pZbihBg29IihgdzfyR2g_qA/exec';
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzvrhqxzR3oF5wX5DG_dcQ4F2lrDDrmpN8WLUzCPQj7XHGEazv12l67Z9q_OGOzm78zww/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
+const APP_CACHE_NAME = 'tor-inventory-v35';
+const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
+const AI_GAP_MS = 1200;          // pause between AI calls to ease GAS load
+const AI_BACKOFF_MS = 6000;      // extra wait after timeout/quota-like errors
+let gasLimitWarning = '';        // shown on Review + Dash when GAS is struggling
+let aiQueueProgress = null;      // { current, total, label }
 
 const HAND_CARRY_OPTIONS = [
   { id: 'personal-bag', label: '隨身背囊', sub: 'Personal Item', icon: '🎒' },
@@ -67,8 +73,10 @@ function bindEvents() {
   $('selectPhotosBtn').addEventListener('click', () => $('bulkPhotoInput').click());
   $('bulkPhotoInput').addEventListener('change', onPhotosSelected);
   $('clearQueueBtn').addEventListener('click', clearReviewQueue);
+  $('clearInboxBtn')?.addEventListener('click', confirmClearInbox);
   $('runAiBtn').addEventListener('click', runAiOnQueue);
   $('rebuildTorListBtn')?.addEventListener('click', rebuildTorList);
+  $('runConnCheckBtn')?.addEventListener('click', runConnectionChecks);
   $('submitAllBtn').addEventListener('click', submitReadyItems);
   $('loadInboxBtn')?.addEventListener('click', loadInboxIntoReview);
 
@@ -256,6 +264,7 @@ async function apiCall(payload, retries = 2) {
   const hasImage = !!payload.image;
   const isAi = payload.action === 'analyze' || payload.action === 'inboxAnalyze';
   const isSave = payload.action === 'save';
+  const isLog = payload.action === 'logError';
   // Inbox AI: Drive fetch + Gemini can exceed 45s (esp. model fallback).
   // Save can be slow (Drive photo link + Sheet write); avoid short 35s cut-off.
   const timeoutMs = isAi ? 120000
@@ -263,6 +272,7 @@ async function apiCall(payload, retries = 2) {
   if (isAi) retries = 1;
   // Never auto-retry save — a timed-out write may already have succeeded (duplicates).
   if (isSave) retries = 0;
+  if (isLog) retries = 0;
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -278,8 +288,22 @@ async function apiCall(payload, retries = 2) {
       });
       const raw = await res.text();
       let data;
-      try { data = JSON.parse(raw); } catch {
-        throw new Error('Invalid server response. Check GAS deployment URL.');
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        const snippet = String(raw || '').replace(/\s+/g, ' ').slice(0, 160);
+        let errMsg;
+        if (!raw || /<!DOCTYPE|<html/i.test(raw)) {
+          errMsg = 'GAS returned a login/HTML page. Redeploy web app with access「任何人 / Anyone」, then soft-refresh. 請將部署權限設為「任何人」後再試。';
+        } else {
+          errMsg = 'Invalid server response. Check GAS deployment URL.' +
+            (snippet ? ` (${snippet})` : '');
+        }
+        if (!isLog) {
+          queueSyslogError_('client', errMsg, `action=${payload.action || '?'} status=${res.status} body=${snippet}`);
+          noteGasLimitWarning_(errMsg);
+        }
+        throw new Error(errMsg);
       }
       if (!data.success) {
         if (data.error?.includes('denied')) {
@@ -287,7 +311,16 @@ async function apiCall(payload, retries = 2) {
           $('loginError').classList.remove('hidden');
           signOut();
         }
+        if (!isLog) {
+          queueSyslogError_('client', data.error || 'Request failed', `action=${payload.action || '?'}`);
+          noteGasLimitWarning_(data.error || '');
+        }
         throw new Error(data.error || 'Request failed');
+      }
+      if (!isLog) {
+        flushSyslogQueue_();
+        // Successful call clears soft warning after a healthy response
+        if (gasLimitWarning && !isAi) clearGasLimitWarning_();
       }
       return data;
     } catch (err) {
@@ -296,7 +329,12 @@ async function apiCall(payload, retries = 2) {
       const aborted = err.name === 'AbortError' || /aborted/i.test(msg);
       if (aborted) {
         if (isAi) {
-          throw new Error('AI timed out. Tap Re-run AI (Wi‑Fi). AI 逾時，請再撳 Re-run AI。');
+          const tMsg = 'AI timed out. Tap Re-run AI (Wi‑Fi). AI 逾時，請再撳 Re-run AI。';
+          if (!isLog) {
+            queueSyslogError_('client', tMsg, `action=${payload.action || '?'}`);
+            noteGasLimitWarning_(tMsg);
+          }
+          throw new Error(tMsg);
         }
         if (isSave) {
           throw new Error('Submit timed out. Checking if it already saved… 提交逾時，檢查是否已寫入…');
@@ -315,9 +353,104 @@ async function apiCall(payload, retries = 2) {
 
   const msg = String(lastErr?.message || lastErr || 'Request failed');
   if (/load failed|failed to fetch|networkerror|network request failed/i.test(msg)) {
+    if (!isLog) queueSyslogError_('client', 'Network error', `action=${payload.action || '?'}`);
     throw new Error('Network error. Check Wi-Fi. 網路不穩。');
   }
   throw lastErr;
+}
+
+function readLocalSyslogQueue_() {
+  try {
+    return JSON.parse(localStorage.getItem(LOCAL_SYSLOG_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalSyslogQueue_(arr) {
+  try {
+    localStorage.setItem(LOCAL_SYSLOG_KEY, JSON.stringify((arr || []).slice(-40)));
+  } catch { /* ignore */ }
+}
+
+function queueSyslogError_(source, message, detail) {
+  const q = readLocalSyslogQueue_();
+  q.push({
+    ts: new Date().toISOString(),
+    level: 'error',
+    source: source || 'client',
+    message: String(message || '').slice(0, 500),
+    detail: String(detail || '').slice(0, 1000),
+    pending: true
+  });
+  writeLocalSyslogQueue_(q);
+  renderLocalSyslogHint_();
+}
+
+async function flushSyslogQueue_() {
+  const token = getIdToken();
+  if (!token) return;
+  const q = readLocalSyslogQueue_();
+  const pending = q.filter((e) => e.pending);
+  if (!pending.length) return;
+  const remain = q.filter((e) => !e.pending);
+  for (const entry of pending) {
+    try {
+      await apiCall({
+        action: 'logError',
+        level: entry.level || 'error',
+        source: entry.source || 'client',
+        message: entry.message,
+        detail: entry.detail
+      }, 0);
+    } catch {
+      remain.push(entry);
+    }
+  }
+  writeLocalSyslogQueue_(remain);
+  renderLocalSyslogHint_();
+}
+
+function renderLocalSyslogHint_() {
+  const el = $('syslogLocalHint');
+  if (!el) return;
+  const pending = readLocalSyslogQueue_().filter((e) => e.pending).length;
+  el.textContent = pending
+    ? `${pending} local error(s) waiting to sync to Sheet「Syslog」`
+    : '';
+}
+
+async function loadSyslog() {
+  const container = $('syslogList');
+  if (!container) return;
+  container.innerHTML = '<p class="activity-loading">Loading syslog…</p>';
+  renderLocalSyslogHint_();
+  try {
+    await flushSyslogQueue_();
+    const data = await apiCall({ action: 'syslog' }, 0);
+    const entries = data.entries || [];
+    const local = readLocalSyslogQueue_().filter((e) => e.pending);
+    if (!entries.length && !local.length) {
+      container.innerHTML = '<p class="activity-empty">No errors in Syslog.</p>';
+      return;
+    }
+    const localHtml = local.map((e) =>
+      `<div class="conn-row fail"><span class="conn-icon">⏳</span><div class="conn-body"><div class="conn-name">${esc(e.message)}</div><div class="conn-detail">local · ${esc(e.source)} · ${esc(e.detail || '')}</div></div></div>`
+    ).join('');
+    const remoteHtml = entries.map((e) =>
+      `<div class="conn-row fail"><span class="conn-icon">❌</span><div class="conn-body"><div class="conn-name">${esc(e.message)}</div><div class="conn-detail">${esc(e.source)} · ${esc(formatRelativeTime(e.timestamp))} · ${esc(e.detail || '')}</div></div></div>`
+    ).join('');
+    container.innerHTML = localHtml + remoteHtml;
+  } catch (err) {
+    const local = readLocalSyslogQueue_();
+    if (local.length) {
+      container.innerHTML = local.slice().reverse().map((e) =>
+        `<div class="conn-row fail"><span class="conn-icon">❌</span><div class="conn-body"><div class="conn-name">${esc(e.message)}</div><div class="conn-detail">local only · ${esc(e.detail || '')}</div></div></div>`
+      ).join('');
+    } else {
+      container.innerHTML = `<p class="activity-empty">${esc(err.message || 'Could not load syslog.')}</p>`;
+    }
+  }
 }
 
 // ============ REVIEW QUEUE ============
@@ -765,17 +898,82 @@ function clearReviewQueue() {
   updateReviewToolbar();
 }
 
+function confirmClearInbox() {
+  if (reviewBusy) { showToast('Busy — wait for AI/submit to finish.', 'error'); return; }
+  openActionSheet(
+    [{ label: 'Clear Inbox (Sheet + pending photos)', value: 'clear', destructive: true }],
+    async (v) => { if (v === 'clear') await clearInboxOnServer(); }
+  );
+}
+
+async function clearInboxOnServer() {
+  try {
+    showToast('Clearing inbox on Sheet…', 'success');
+    const data = await apiCall({ action: 'inboxClear' }, 0);
+    // Drop inbox-backed cards; keep any local-only photos still in the list
+    reviewQueue = reviewQueue.filter((q) => !q.inboxId);
+    renderReviewQueue();
+    updateReviewToolbar();
+    const n = data.deleted || 0;
+    const f = data.trashedFiles || 0;
+    showToast(`Inbox cleared · Sheet ${n} row(s) · ${f} photo(s) trashed`, 'success');
+  } catch (err) {
+    showToast(err.message || 'Clear inbox failed', 'error');
+  }
+}
+
+function isGasLimitLikeError_(msg) {
+  const s = String(msg || '');
+  return /timed out|逾時|timeout|quota|rate limit|too many|Service invoked too many|Exceeded maximum|HTML page|Invalid server response|網路不穩|Network error|429|503/i.test(s);
+}
+
+function noteGasLimitWarning_(msg) {
+  if (!isGasLimitLikeError_(msg)) return;
+  gasLimitWarning = 'GAS may be slow / rate-limited. AI runs one-by-one with pauses. Wait on Wi‑Fi, then retry. GAS 可能繁忙／限流，AI 會逐張暫停再跑。';
+  renderGasLimitBanner_();
+}
+
+function clearGasLimitWarning_() {
+  gasLimitWarning = '';
+  renderGasLimitBanner_();
+}
+
+function renderGasLimitBanner_() {
+  ['gasLimitBanner', 'gasLimitBannerDash'].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    if (!gasLimitWarning) {
+      el.classList.add('hidden');
+      el.textContent = '';
+      return;
+    }
+    el.textContent = gasLimitWarning;
+    el.classList.remove('hidden');
+  });
+}
+
+function sleep_(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 function updateReviewToolbar() {
   const pending = reviewQueue.filter((q) => q.state === 'pending' || q.state === 'error').length;
   const ready = reviewQueue.filter((q) => q.state === 'ready' && q.included).length;
   const done = reviewQueue.filter((q) => q.state === 'done').length;
   const analyzing = reviewQueue.filter((q) => q.state === 'analyzing' || q.state === 'submitting').length;
-  $('reviewProgress').textContent = reviewQueue.length
+  let text = reviewQueue.length
     ? `${reviewQueue.length} photos · ${pending} need AI · ${ready} ready · ${done} submitted`
     : 'No photos yet';
+  if (aiQueueProgress) {
+    text += ` · AI ${aiQueueProgress.current}/${aiQueueProgress.total}`;
+    if (aiQueueProgress.label) text += ` · ${aiQueueProgress.label}`;
+  } else if (analyzing) {
+    text += ' · working…';
+  }
+  $('reviewProgress').textContent = text;
   $('runAiBtn').disabled = reviewBusy || pending === 0;
   $('submitAllBtn').disabled = reviewBusy || ready === 0;
-  if (analyzing) $('reviewProgress').textContent += ` · working…`;
+  renderGasLimitBanner_();
 }
 
 function renderReviewQueue() {
@@ -916,9 +1114,32 @@ function bindReviewCard(card) {
 
   card.querySelector('[data-action="remove"]')?.addEventListener('click', () => {
     if (reviewBusy) return;
-    reviewQueue = reviewQueue.filter((q) => q.id !== id);
-    renderReviewQueue();
-    updateReviewToolbar();
+    const removeLocal = () => {
+      reviewQueue = reviewQueue.filter((q) => q.id !== id);
+      renderReviewQueue();
+      updateReviewToolbar();
+    };
+    if (!item.inboxId) {
+      removeLocal();
+      return;
+    }
+    openActionSheet(
+      [{ label: 'Remove from Inbox + Sheet', value: 'remove', destructive: true }],
+      async (v) => {
+        if (v !== 'remove') return;
+        try {
+          await apiCall({ action: 'inboxDelete', inboxId: item.inboxId }, 0);
+          removeLocal();
+          showToast('Removed from Inbox / Sheet', 'success');
+        } catch (err) {
+          if (/not found/i.test(String(err.message || ''))) {
+            removeLocal();
+            return;
+          }
+          showToast(err.message || 'Could not remove from Sheet', 'error');
+        }
+      }
+    );
   });
 
   card.querySelector('[data-action="reai"]')?.addEventListener('click', async () => {
@@ -1030,14 +1251,36 @@ async function runAiOnQueue() {
   if (!targets.length) return;
   reviewBusy = true;
   updateReviewToolbar();
-  showToast(`Running AI on ${targets.length} photo(s)…`, 'success');
+  showToast(`Running AI on ${targets.length} photo(s) · one-by-one…`, 'success');
 
-  // Round 1
-  for (const item of targets) {
-    await analyzeOne(item);
-    renderReviewQueue();
-    updateReviewToolbar();
+  async function runSequential_(list, roundLabel) {
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      aiQueueProgress = {
+        current: i + 1,
+        total: list.length,
+        label: roundLabel || 'running'
+      };
+      updateReviewToolbar();
+      await analyzeOne(item);
+      renderReviewQueue();
+      updateReviewToolbar();
+
+      const failedLike = isGasLimitLikeError_(item.error);
+      if (failedLike) {
+        aiQueueProgress.label = 'pausing (GAS busy)';
+        updateReviewToolbar();
+        await sleep_(AI_BACKOFF_MS);
+      } else if (i < list.length - 1) {
+        aiQueueProgress.label = 'pause';
+        updateReviewToolbar();
+        await sleep_(AI_GAP_MS);
+      }
+    }
   }
+
+  // Round 1 — sequential with gaps
+  await runSequential_(targets, 'round 1');
 
   // Round 2: retry failures after first round finishes
   const failed = targets.filter(isAiFailure);
@@ -1046,12 +1289,12 @@ async function runAiOnQueue() {
     for (const item of failed) {
       item.state = 'pending';
       item.error = '';
-      await analyzeOne(item);
-      renderReviewQueue();
-      updateReviewToolbar();
     }
+    await sleep_(AI_BACKOFF_MS);
+    await runSequential_(failed, 'retry');
   }
 
+  aiQueueProgress = null;
   reviewBusy = false;
   updateReviewToolbar();
   const ready = reviewQueue.filter((q) => q.state === 'ready' && String(q.itemDescription || '').trim()).length;
@@ -1331,6 +1574,121 @@ async function loadActivityLog() {
   } catch (err) {
     if (container) container.innerHTML = `<p class="activity-empty">${esc(err.message || 'Could not load activity.')}</p>`;
   }
+}
+
+function renderConnRow_(name, state, detail) {
+  const icon = state === 'ok' ? '✅' : state === 'fail' ? '❌' : state === 'run' ? '⏳' : '•';
+  const cls = state === 'ok' ? 'ok' : state === 'fail' ? 'fail' : state === 'run' ? 'run' : '';
+  return `<div class="conn-row ${cls}"><span class="conn-icon">${icon}</span><div class="conn-body"><div class="conn-name">${esc(name)}</div><div class="conn-detail">${esc(detail || '')}</div></div></div>`;
+}
+
+function setConnStatusRows_(rows) {
+  const el = $('connStatusList');
+  if (!el) return;
+  el.innerHTML = rows.map((r) => renderConnRow_(r.name, r.state, r.detail)).join('');
+}
+
+async function pingGasPublic_() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(GAS_API_URL, { method: 'GET', redirect: 'follow', signal: ctrl.signal });
+    const raw = await res.text();
+    let data;
+    try { data = JSON.parse(raw); } catch {
+      throw new Error(/<html/i.test(raw)
+        ? 'GAS returned HTML (set deployment access to Anyone / 任何人)'
+        : 'GAS GET was not JSON');
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runConnectionChecks() {
+  const btn = $('runConnCheckBtn');
+  if (btn) btn.disabled = true;
+  const rows = [
+    { name: '1. App (GitHub Pages)', state: 'run', detail: 'Checking…' },
+    { name: '2. GAS public ping', state: 'run', detail: 'Checking…' },
+    { name: '3. Google sign-in', state: 'run', detail: 'Checking…' },
+    { name: '4. GAS + Sheet / Drive / Inbox', state: 'run', detail: 'Checking…' }
+  ];
+  setConnStatusRows_(rows);
+
+  // 1) Frontend / Pages
+  try {
+    const sw = navigator.serviceWorker?.controller ? 'SW active' : 'SW not controlling yet';
+    const cache = APP_CACHE_NAME;
+    rows[0] = {
+      name: '1. App (GitHub Pages)',
+      state: 'ok',
+      detail: `${location.origin}${location.pathname} · ${cache} · ${sw}`
+    };
+  } catch (err) {
+    rows[0] = { name: '1. App (GitHub Pages)', state: 'fail', detail: err.message || 'App check failed' };
+  }
+  setConnStatusRows_(rows);
+
+  // 2) Public GAS GET
+  try {
+    const data = await pingGasPublic_();
+    const ver = data.version || data.apiVersion || '?';
+    rows[1] = {
+      name: '2. GAS public ping',
+      state: data.status === 'ok' || data.success ? 'ok' : 'fail',
+      detail: `API ${ver} · ${data.message || data.model || 'ok'}`
+    };
+  } catch (err) {
+    rows[1] = { name: '2. GAS public ping', state: 'fail', detail: err.message || 'GAS unreachable' };
+    noteGasLimitWarning_(err.message || '');
+  }
+  setConnStatusRows_(rows);
+
+  // 3) Sign-in
+  const token = getIdToken();
+  if (!token) {
+    rows[2] = { name: '3. Google sign-in', state: 'fail', detail: 'Not signed in' };
+    rows[3] = { name: '4. GAS + Sheet / Drive / Inbox', state: 'fail', detail: 'Sign in first' };
+    setConnStatusRows_(rows);
+    renderGasLimitBanner_();
+    if (btn) btn.disabled = false;
+    return;
+  }
+  rows[2] = { name: '3. Google sign-in', state: 'ok', detail: 'ID token present' };
+  setConnStatusRows_(rows);
+
+  // 4) Authenticated health (Sheet + Drive + Inbox)
+  try {
+    const health = await apiCall({ action: 'health' });
+    const parts = [];
+    parts.push(health.sheetOk ? `Sheet OK (${health.itemCount || 0} rows)` : `Sheet FAIL: ${health.sheetError || '?'}`);
+    parts.push(health.driveOk ? 'Drive OK' : `Drive FAIL: ${health.driveError || '?'}`);
+    parts.push(health.inboxOk ? `Inbox OK (${health.inboxPending || 0} pending)` : `Inbox FAIL: ${health.inboxError || '?'}`);
+    if (health.email) parts.push(health.email);
+    if (health.version) parts.push(`API ${health.version}`);
+    rows[3] = {
+      name: '4. GAS + Sheet / Drive / Inbox',
+      state: health.ok ? 'ok' : 'fail',
+      detail: parts.join(' · ')
+    };
+    if (health.ok) clearGasLimitWarning_();
+  } catch (err) {
+    rows[3] = {
+      name: '4. GAS + Sheet / Drive / Inbox',
+      state: 'fail',
+      detail: err.message || 'Authenticated GAS call failed'
+    };
+    noteGasLimitWarning_(err.message || '');
+  }
+  setConnStatusRows_(rows);
+  renderGasLimitBanner_();
+  if (btn) btn.disabled = false;
+
+  const failed = rows.filter((r) => r.state === 'fail').length;
+  if (!failed) showToast('All connections OK ✅', 'success');
+  else showToast(`${failed} check(s) failed — see Dashboard`, 'error', 4000);
 }
 
 function renderDashboard() {
@@ -1693,7 +2051,13 @@ function switchTab(tab) {
   if (tab === 'edit') $('screenEdit').classList.add('active');
   if (tab === 'items') { $('screenItems').classList.add('active'); renderFilteredList(); }
   if (tab === 'boxes') { $('screenBoxes').classList.add('active'); renderBoxSummary(); renderProgressBars(); }
-  if (tab === 'dashboard') { $('screenDashboard').classList.add('active'); renderDashboard(); loadActivityLog(); }
+  if (tab === 'dashboard') {
+    $('screenDashboard').classList.add('active');
+    renderDashboard();
+    loadActivityLog();
+    runConnectionChecks();
+    loadSyslog();
+  }
 }
 
 function showToast(msg, type = 'success', ms = 2800) {

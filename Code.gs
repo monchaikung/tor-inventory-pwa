@@ -7,6 +7,7 @@ const DRIVE_FOLDER_ID = '1zDSkyqyLU-DjHbZ3gkSdY8tAi8qbrcFn';
 //   ALLOWED_EMAILS = monchai.kung@gmail.com,kristintsang@gmail.com
 
 const ACTIVITY_SHEET_NAME = 'Activity Log';
+const SYSLOG_SHEET_NAME = 'Syslog';
 const INBOX_SHEET_NAME = 'Pending Inbox';
 const INBOX_FOLDER_NAME = 'Inbox';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
@@ -18,14 +19,16 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v26' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v30' });
 }
 
 function doPost(e) {
+  var email = '';
   try {
     const body = JSON.parse(e.postData.contents);
     const user = verifyAccess_(body.idToken);
     if (!user) return jsonResponse({ success: false, error: 'Access denied' });
+    email = user.email;
 
     switch (body.action) {
       case 'analyze': return jsonResponse(analyzeImage_(body.image));
@@ -40,10 +43,17 @@ function doPost(e) {
       case 'inboxList': return jsonResponse(inboxList_());
       case 'inboxAnalyze': return jsonResponse(inboxAnalyze_(body.inboxId));
       case 'inboxDelete': return jsonResponse(inboxDelete_(body.inboxId, user.email));
+      case 'inboxClear': return jsonResponse(inboxClear_(user.email));
       case 'rebuildTorList': return jsonResponse(rebuildTorItemList_(user.email));
+      case 'health': return jsonResponse(healthCheck_(user.email));
+      case 'logError': return jsonResponse(logClientError_(body, user.email));
+      case 'syslog': return jsonResponse(getSyslog_());
       default: return jsonResponse({ success: false, error: 'Unknown action' });
     }
   } catch (err) {
+    try {
+      logSyslog_('error', 'gas', String(err.message || err), '', email || '');
+    } catch (e2) {}
     return jsonResponse({ success: false, error: err.message });
   }
 }
@@ -421,6 +431,57 @@ function getActivityLog_() {
   return { success: true, entries: entries };
 }
 
+function getSyslogSheet_() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName(SYSLOG_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(SYSLOG_SHEET_NAME);
+    sheet.appendRow(['Timestamp', 'Level', 'Source', 'Message', 'Detail', 'User']);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function logSyslog_(level, source, message, detail, email) {
+  getSyslogSheet_().appendRow([
+    new Date().toISOString(),
+    sanitizeSheetValue_(level || 'error'),
+    sanitizeSheetValue_(source || 'app'),
+    sanitizeSheetValue_(String(message || '').substring(0, 500)),
+    sanitizeSheetValue_(String(detail || '').substring(0, 1000)),
+    sanitizeSheetValue_(email || '')
+  ]);
+}
+
+function logClientError_(body, email) {
+  logSyslog_(
+    body.level || 'error',
+    body.source || 'client',
+    body.message || 'client error',
+    body.detail || '',
+    email
+  );
+  return { success: true };
+}
+
+function getSyslog_() {
+  const sheet = getSyslogSheet_();
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return { success: true, entries: [] };
+  const entries = [];
+  for (var i = data.length - 1; i >= 1 && entries.length < 40; i--) {
+    entries.push({
+      timestamp: String(data[i][0]),
+      level: String(data[i][1] || ''),
+      source: String(data[i][2] || ''),
+      message: String(data[i][3] || ''),
+      detail: String(data[i][4] || ''),
+      user: String(data[i][5] || '')
+    });
+  }
+  return { success: true, entries: entries };
+}
+
 function logAppOpen_(client, email) {
   if (!checkOpenRateLimit_(email)) return { success: true, skipped: true };
 
@@ -660,6 +721,9 @@ function inboxAnalyze_(inboxId) {
     return analyzeImage_(base64, { fast: true });
   } catch (err) {
     try { found.sheet.getRange(found.row, 9).setValue('pending'); } catch (e2) {}
+    try {
+      logSyslog_('error', 'inboxAnalyze', String(err.message || err), String(inboxId), '');
+    } catch (e3) {}
     throw err;
   }
 }
@@ -674,6 +738,30 @@ function inboxDelete_(inboxId, email) {
   found.sheet.deleteRow(found.row);
   logActivity_(email, 'inbox', 'Removed pending photo', String(found.data[5] || ''));
   return { success: true };
+}
+
+/** Clear Pending Inbox sheet. Trash Drive only for non-done rows (done photos are still used by inventory). */
+function inboxClear_(email) {
+  const sheet = getInboxSheet_();
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return { success: true, deleted: 0, trashedFiles: 0 };
+
+  var deleted = 0;
+  var trashedFiles = 0;
+  for (var i = data.length - 1; i >= 1; i--) {
+    const status = String(data[i][8] || 'pending');
+    const fileId = String(data[i][4] || '');
+    if (status !== 'done' && fileId) {
+      try {
+        DriveApp.getFileById(fileId).setTrashed(true);
+        trashedFiles++;
+      } catch (e) {}
+    }
+    sheet.deleteRow(i + 1);
+    deleted++;
+  }
+  logActivity_(email, 'inbox', 'Cleared inbox', deleted + ' row(s), ' + trashedFiles + ' file(s) trashed');
+  return { success: true, deleted: deleted, trashedFiles: trashedFiles };
 }
 
 function sanitizeFilename_(str) {
@@ -854,7 +942,64 @@ function rebuildTorItemList_(email) {
   return { success: true, count: n, sheet: TOR_LIST_SHEET_NAME };
 }
 
+function healthCheck_(email) {
+  var sheetOk = false;
+  var inboxOk = false;
+  var driveOk = false;
+  var sheetName = '';
+  var itemCount = 0;
+  var inboxPending = 0;
+  var sheetError = '';
+  var inboxError = '';
+  var driveError = '';
+
+  try {
+    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+    sheetName = sheet.getName();
+    itemCount = Math.max(0, sheet.getLastRow() - 1);
+    sheetOk = true;
+  } catch (e) {
+    sheetError = String(e.message || e);
+  }
+
+  try {
+    var inboxSheet = getInboxSheet_();
+    var data = inboxSheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][8] || 'pending') !== 'done') inboxPending++;
+    }
+    inboxOk = true;
+  } catch (e2) {
+    inboxError = String(e2.message || e2);
+  }
+
+  try {
+    DriveApp.getFolderById(DRIVE_FOLDER_ID).getName();
+    driveOk = true;
+  } catch (e3) {
+    driveError = String(e3.message || e3);
+  }
+
+  return {
+    success: true,
+    version: 'v30',
+    email: email || '',
+    sheetOk: sheetOk,
+    inboxOk: inboxOk,
+    driveOk: driveOk,
+    sheetName: sheetName,
+    itemCount: itemCount,
+    inboxPending: inboxPending,
+    sheetError: sheetError,
+    inboxError: inboxError,
+    driveError: driveError,
+    ok: sheetOk && inboxOk && driveOk
+  };
+}
+
 function jsonResponse(obj) {
+  // TEXT (not JSON) avoids empty/HTML responses on some browsers after the
+  // script.google.com → googleusercontent.com redirect (CORS + Load Inbox fails).
   return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+    .setMimeType(ContentService.MimeType.TEXT);
 }

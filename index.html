@@ -87,11 +87,15 @@
 
       <!-- REVIEW: select → AI → check → submit -->
       <div id="screenReview" class="screen active">
-        <p class="review-hint">Load phone inbox（按影相時間）或揀本機相 → Run AI（唔會改 Transport／Box #）→ 檢查 → Submit<br>Load inbox or local photos → Run AI (won't change Transport / Box #) → check → Submit</p>
+        <p class="review-hint">Load phone inbox（按影相時間）或揀本機相 → Run AI（唔會改 Transport／Box #）→ 檢查 → Submit<br>Load inbox or local photos → Run AI (won't change Transport / Box #) → check → Submit<br><strong>Clear Inbox</strong> 會刪 Sheet「Pending Inbox」記錄同未入庫相 · Clear list 只清本機畫面</p>
+        <div id="gasLimitBanner" class="gas-limit-banner hidden" role="status"></div>
         <div class="ios-btn-row">
           <button class="ios-btn-secondary" id="loadInboxBtn">📥 Load Inbox</button>
           <button class="ios-btn-secondary" id="selectPhotosBtn">🖼 Local photos</button>
-          <button class="ios-btn-secondary" id="clearQueueBtn">Clear</button>
+          <button class="ios-btn-secondary" id="clearQueueBtn">Clear list</button>
+        </div>
+        <div class="ios-btn-row">
+          <button class="ios-btn-secondary" id="clearInboxBtn" style="color: var(--ios-red);">🗑 Clear Inbox</button>
         </div>
         <input type="file" id="bulkPhotoInput" accept="image/*" multiple class="hidden">
 
@@ -192,6 +196,27 @@
       </div>
 
       <div id="screenDashboard" class="screen">
+        <div class="ios-card dash-section">
+          <div class="conn-head">
+            <div>
+              <p class="dash-section-title">Connection status</p>
+              <p class="dash-section-sub">User → GitHub Pages → GAS → Google Sheet / Drive</p>
+            </div>
+            <button type="button" class="ios-btn-secondary" id="runConnCheckBtn">Run checks</button>
+          </div>
+          <div id="connStatusList" class="conn-list">
+            <p class="activity-loading">Tap Run checks to test the full path.</p>
+          </div>
+          <div id="gasLimitBannerDash" class="gas-limit-banner hidden" style="margin-top:10px;" role="status"></div>
+        </div>
+        <div class="ios-card dash-section">
+          <p class="dash-section-title">Syslog / errors</p>
+          <p class="dash-section-sub">Client + GAS failures · synced to Sheet tab「Syslog」</p>
+          <p id="syslogLocalHint" class="conn-detail" style="margin:0 0 8px;"></p>
+          <div id="syslogList" class="conn-list">
+            <p class="activity-loading">Open Dash to load syslog.</p>
+          </div>
+        </div>
         <div class="ios-btn-row" style="margin-bottom:12px;">
           <button type="button" class="ios-btn-secondary" id="rebuildTorListBtn">📋 Rebuild TOR Item List</button>
         </div>
