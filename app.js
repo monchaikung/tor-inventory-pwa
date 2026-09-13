@@ -1,7 +1,7 @@
 // ============ CONFIGURATION ============
-const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyOy2Ock7nEv6jPevdzhk_KNkCMetLFBX8anQ-PYKq3TOaMCnVcB3XKTndDfbDBZvsFjg/exec';
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzvrhqxzR3oF5wX5DG_dcQ4F2lrDDrmpN8WLUzCPQj7XHGEazv12l67Z9q_OGOzm78zww/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v33';
+const APP_CACHE_NAME = 'tor-inventory-v34';
 const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
 const AI_GAP_MS = 1200;          // pause between AI calls to ease GAS load
 const AI_BACKOFF_MS = 6000;      // extra wait after timeout/quota-like errors
