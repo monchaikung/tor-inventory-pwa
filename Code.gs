@@ -19,7 +19,7 @@ const ALLOWED_MODES = ['PWA', 'Browser'];
 const ALLOWED_NETWORKS = ['slow-2g', '2g', '3g', '4g', ''];
 
 function doGet() {
-  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v30' });
+  return jsonResponse({ status: 'ok', message: 'ToR Inventory API is running', model: 'gemini-3.5-flash-lite', version: 'v31' });
 }
 
 function doPost(e) {
@@ -789,7 +789,17 @@ function searchItems_(query) {
       weight: String(row[7] || ''),
       estimatedValue: String(row[8] || ''),
       status: String(row[9] || ''),
-      photoLink: String(row[10] || '')
+      photoLink: String(row[10] || ''),
+      fileId: (function () {
+        var p = String(row[10] || '');
+        var m = p.match(/\/d\/([^/]+)/) || p.match(/[?&]id=([^&]+)/);
+        return m ? m[1] : '';
+      })(),
+      thumbUrl: (function () {
+        var p = String(row[10] || '');
+        var m = p.match(/\/d\/([^/]+)/) || p.match(/[?&]id=([^&]+)/);
+        return m ? ('https://lh3.googleusercontent.com/d/' + m[1] + '=w400') : '';
+      })()
     };
     if (q) {
       const haystack = [item.location, item.itemDescription, item.roomCategory, item.transportMode, item.status].join(' ').toLowerCase();
@@ -982,7 +992,7 @@ function healthCheck_(email) {
 
   return {
     success: true,
-    version: 'v30',
+    version: 'v31',
     email: email || '',
     sheetOk: sheetOk,
     inboxOk: inboxOk,
