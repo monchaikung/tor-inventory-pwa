@@ -1,5 +1,6 @@
 .env
 .env.*
+!.env.example
 *.local
 .DS_Store
 Thumbs.db
@@ -8,3 +9,18 @@ desktop.ini
 .idea/
 node_modules/
 *.log
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+cars.db
+*.db-journal
+.streamlit/secrets.toml

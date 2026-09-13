@@ -1,0 +1,202 @@
+{
+  "volkswagen golf": {
+    "make": "Volkswagen",
+    "model": "Golf",
+    "years": "2013–2024 (Mk7 / Mk8)",
+    "service_interval": "Every 12 months or 10,000 miles",
+    "service_cost_band": "£180–£350 independent; main dealer higher",
+    "running_notes": "Generally cheap to run; 1.5 TSI and diesels need correct oil spec. DSG cars need gearbox servicing.",
+    "common_issues": [
+      "DSG (DQ200 dry clutch) mechatronic faults and judder on some petrol automatics",
+      "Water pump / thermostat housing leaks on 1.4/1.5 TSI",
+      "Early Mk8 infotainment freezes and camera glitches",
+      "Rear coil springs can snap on higher-mileage Mk7s"
+    ],
+    "viewing_checks": [
+      "Ask for DSG oil-change stamps if it is an automatic",
+      "Check Digital Cockpit, ACC and cameras work on a test drive",
+      "Look for coolant residue around the thermostat housing",
+      "Inspect the spare-wheel well for damp"
+    ]
+  },
+  "ford fiesta": {
+    "make": "Ford",
+    "model": "Fiesta",
+    "years": "2008–2023 (Mk7 / Mk8)",
+    "service_interval": "Every 12 months or 12,500 miles",
+    "service_cost_band": "£140–£280 independent",
+    "running_notes": "Very cheap to insure and tax. Powershift automatics are a known weak point — prefer manuals.",
+    "common_issues": [
+      "Powershift dual-clutch jerks, flares and expensive clutch packs",
+      "Rear torsion-beam / spring cup corrosion on Mk7",
+      "1.0 EcoBoost wet belt (timing belt in oil) on some engines — check service history",
+      "Steering-column click and worn anti-roll bar links"
+    ],
+    "viewing_checks": [
+      "Avoid Powershift unless there is documentary clutch/gearbox work",
+      "Confirm wet-belt replacement interval on EcoBoost cars",
+      "Listen for rear suspension knocks over speed bumps",
+      "Check for rust around the rear beam mounts"
+    ]
+  },
+  "nissan qashqai": {
+    "make": "Nissan",
+    "model": "Qashqai",
+    "years": "2014–2021 (J11) and 2021+ (J12)",
+    "service_interval": "Every 12 months or 12,500 miles",
+    "service_cost_band": "£180–£320 independent",
+    "running_notes": "Popular family crossover. CVT smoothness and rattly interiors are the usual talking points.",
+    "common_issues": [
+      "CVT hesitation or whine if fluid never changed",
+      "Panoramic sunroof rattles and drain-tube leaks (J11)",
+      "DAB / sat-nav reboots",
+      "Diesel DPF / EGR issues on short-trip cars"
+    ],
+    "viewing_checks": [
+      "CVT should pull smoothly from a stop with no flare",
+      "Open the sunroof and check headlining for watermarks",
+      "Confirm a recent CVT fluid change on higher-mileage examples",
+      "Check Around View cameras and parking sensors"
+    ]
+  },
+  "toyota corolla": {
+    "make": "Toyota",
+    "model": "Corolla",
+    "years": "2019+ (E210 hybrid)",
+    "service_interval": "Every 12 months or 10,000 miles",
+    "service_cost_band": "£160–£280 independent / Toyota hybrid health check extra",
+    "running_notes": "Hybrid system is generally bulletproof. Expect excellent MPG in mixed driving and low wear on brakes.",
+    "common_issues": [
+      "Infotainment lag and patchy smartphone mirroring on early cars",
+      "12V auxiliary battery can go flat if the car sits unused",
+      "Rear brake rust if used mainly on light hybrid regen",
+      "Paint chips on leading edges"
+    ],
+    "viewing_checks": [
+      "Ready screen should show hybrid system OK with no warning triangles",
+      "Confirm Toyota service history and hybrid inverter coolant service if due",
+      "Test Apple CarPlay / Android Auto",
+      "Check the 12V battery date"
+    ]
+  },
+  "bmw 3 series": {
+    "make": "BMW",
+    "model": "3 Series",
+    "years": "2015–2019 (F30) and 2019+ (G20)",
+    "service_interval": "Condition-based; budget annually",
+    "service_cost_band": "£250–£500 independent BMW specialist",
+    "running_notes": "320d is efficient on longer runs. Timing-chain and oil-leak history matters more than spec boxes.",
+    "common_issues": [
+      "Timing chain stretch on some B47/N47 diesels — listen on cold start",
+      "Oil filter housing and oil-cooler gasket leaks",
+      "Suspension bushes and rear subframe corrosion (F30)",
+      "iDrive / Sat Nav map-update niggles"
+    ],
+    "viewing_checks": [
+      "Cold-start the engine from stone cold and listen at the front cover",
+      "Inspect for oil around the filter housing",
+      "Full BMW or specialist history with oil changes at sensible intervals",
+      "Scan for DPF / AdBlue warnings on diesels"
+    ]
+  },
+  "honda civic": {
+    "make": "Honda",
+    "model": "Civic",
+    "years": "2017–2022 (FK / FC)",
+    "service_interval": "Every 12 months or 12,500 miles",
+    "service_cost_band": "£160–£300 independent",
+    "running_notes": "1.0 VTEC Turbo is lively but needs oil on time. Diesel models are rarer in this budget.",
+    "common_issues": [
+      "1.0 turbo can suffer oil dilution / consumption if only used on short trips",
+      "Air-con condenser and lower-front corrosion",
+      "Infotainment reboots",
+      "Rear brake squeal"
+    ],
+    "viewing_checks": [
+      "Dipstick level and colour; ask about oil-use",
+      "Honda Sensing (ACC, lane keep) should track cleanly",
+      "Check front underside for stone chips and condenser damage",
+      "Full service history with Honda or specialist"
+    ]
+  },
+  "audi a3": {
+    "make": "Audi",
+    "model": "A3",
+    "years": "2012–2020 (8V)",
+    "service_interval": "Every 12 months or 9,000–10,000 miles",
+    "service_cost_band": "£200–£380 specialist",
+    "running_notes": "Shares Golf bones. Haldex (quattro) and S tronic servicing are the cost spikes.",
+    "common_issues": [
+      "Water pump / thermostat leaks on TFSI",
+      "S tronic mechatronics on neglected autos",
+      "Haldex pump failure on quattro if oil never changed",
+      "MMI glitches and reversing-camera failure"
+    ],
+    "viewing_checks": [
+      "Service pack for Haldex / DSG if fitted",
+      "Coolant level and staining at the front of the engine",
+      "Virtual Cockpit and sensors on a test drive",
+      "Check for liner issues only on older high-mileage TFSI (less common on later 8V)"
+    ]
+  },
+  "vauxhall corsa": {
+    "make": "Vauxhall",
+    "model": "Corsa",
+    "years": "2014–2019 (E) and 2019+ (F)",
+    "service_interval": "Every 12 months or 12,000 miles",
+    "service_cost_band": "£130–£250 independent",
+    "running_notes": "Cheap to buy and insure. Corsa F (PSA) is a different car to the older GM Corsa E.",
+    "common_issues": [
+      "Corsa E rear beam / brake-pipe corrosion",
+      "Low-speed stalling or timing-chain rattle on some 1.0/1.2 petrols",
+      "Infotainment lag on Corsa F",
+      "AdBlue / DPF on diesels used for short hops"
+    ],
+    "viewing_checks": [
+      "Inspect rear underside for rust on Corsa E",
+      "Smooth idle when cold",
+      "Confirm remaining warranty on newer Corsa F",
+      "Test reverse camera and parking sensors"
+    ]
+  },
+  "kia sportage": {
+    "make": "Kia",
+    "model": "Sportage",
+    "years": "2016–2021 (QL)",
+    "service_interval": "Every 12 months or 10,000 miles",
+    "service_cost_band": "£160–£300 independent (keep Kia stamps for warranty)",
+    "running_notes": "7-year warranty is the headline if it is still transferable. Diesels want motorway use.",
+    "common_issues": [
+      "DCT dual-clutch shudder on some petrol autos",
+      "Diesel DPF / EGR on urban cars",
+      "Infotainment / reversing-camera cameras",
+      "Front-arm bushes and drop links"
+    ],
+    "viewing_checks": [
+      "Confirm remaining Kia warranty and main-dealer stamps",
+      "DCT should not shudder at low speed",
+      "Check panoramic roof drains if fitted",
+      "Four-wheel-drive engagement on a short test drive if GT-Line AWD"
+    ]
+  },
+  "hyundai tucson": {
+    "make": "Hyundai",
+    "model": "Tucson",
+    "years": "2015–2020 (TL) and 2021+ (NX4)",
+    "service_interval": "Every 12 months or 10,000 miles",
+    "service_cost_band": "£160–£300 independent",
+    "running_notes": "Similar recipe to Sportage. Warranty transfer is worth more than a slightly lower asking price.",
+    "common_issues": [
+      "Dual-clutch (7DCT) low-speed judder",
+      "Diesel DPF on short trips",
+      "Rear shock leaks",
+      "Sat-nav map age"
+    ],
+    "viewing_checks": [
+      "Warranty remaining and stamped book",
+      "Smooth take-up from rest on DCT cars",
+      "No warning lights after a 15-minute drive",
+      "Inspect tyres for inner-edge wear (alignment)"
+    ]
+  }
+}
