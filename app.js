@@ -1,7 +1,7 @@
 // ============ CONFIGURATION ============
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzvrhqxzR3oF5wX5DG_dcQ4F2lrDDrmpN8WLUzCPQj7XHGEazv12l67Z9q_OGOzm78zww/exec';
 const GOOGLE_CLIENT_ID = '869989444444-o666m973d6ofrfnaip7g0lthsmi6l5g3.apps.googleusercontent.com';
-const APP_CACHE_NAME = 'tor-inventory-v35';
+const APP_CACHE_NAME = 'tor-inventory-v36';
 const LOCAL_SYSLOG_KEY = 'torSyslogQueue';
 const AI_GAP_MS = 1200;          // pause between AI calls to ease GAS load
 const AI_BACKOFF_MS = 6000;      // extra wait after timeout/quota-like errors
@@ -2023,9 +2023,17 @@ function locRow(title, b, location, transport) {
   return `<div class="location-row" data-location="${esc(location)}" data-transport="${transport}"><div><div style="font-weight:500">${title}</div><div style="font-size:13px;color:#8E8E93;margin-top:2px">${b.items.length} items · ${b.packed} packed · ${fmtW(b.weight)}</div></div><span style="color:#8E8E93">›</span></div>`;
 }
 
+/** Parse weight text to kilograms. Converts g/grams/克 → kg; bare numbers treated as kg. */
 function parseWeight(w) {
-  const n = parseFloat(String(w || '').replace(/[^0-9.]/g, ''));
-  return isNaN(n) ? 0 : n;
+  const s = String(w || '').trim().toLowerCase();
+  if (!s) return 0;
+  const m = s.replace(/,/g, '').match(/[0-9]*\.?[0-9]+/);
+  const n = m ? parseFloat(m[0]) : NaN;
+  if (isNaN(n) || n <= 0) return 0;
+  if (/kg|kilogram|公斤|千克/.test(s)) return n;
+  // "200 g", "200g", "200 grams", "200克"
+  if (/gram|克|[0-9.]+\s*g\b/.test(s)) return n / 1000;
+  return n;
 }
 function fmtW(w) { return w > 0 ? `${w.toFixed(1)}kg` : '—'; }
 
