@@ -195,6 +195,25 @@
         <div id="boxSummary"></div>
       </div>
 
+
+      <div id="screenPhotos" class="screen">
+        <div id="photosAlbumsView">
+          <p class="photos-hint">iPhone 相簿風格 · 全部物品相片，亦可按箱睇<br>All item photos · open a box album for one box</p>
+          <div id="photosAlbums" class="photos-albums"></div>
+        </div>
+        <div id="photosGridView" class="hidden">
+          <div class="photos-grid-toolbar">
+            <button type="button" class="ios-text-btn" id="photosBackBtn">‹ Albums</button>
+            <div class="photos-grid-title-wrap">
+              <div class="photos-grid-title" id="photosGridTitle">All Photos</div>
+              <div class="photos-grid-sub" id="photosGridSub"></div>
+            </div>
+            <button type="button" class="ios-text-btn" id="photosSortBtn">Sort</button>
+          </div>
+          <div id="photosGrid" class="photos-grid"></div>
+        </div>
+      </div>
+
       <div id="screenDashboard" class="screen">
         <div class="ios-card dash-section">
           <div class="conn-head">
@@ -245,6 +264,9 @@
       <button class="tab-btn" data-tab="items">
         <span class="tab-icon">📋</span>Items
       </button>
+      <button class="tab-btn" data-tab="photos">
+        <span class="tab-icon">🖼️</span>Photos
+      </button>
       <button class="tab-btn" data-tab="boxes">
         <span class="tab-icon">📦</span>Boxes
       </button>
@@ -261,6 +283,19 @@
         <button class="action-sheet-btn" id="actionSheetCancel">Cancel</button>
       </div>
     </div>
+  </div>
+
+  
+  <div id="photoLightbox" class="photo-lightbox hidden" aria-hidden="true">
+    <div class="photo-lightbox-top">
+      <button type="button" class="photo-lightbox-btn" id="photoLightboxClose">Close</button>
+      <div class="photo-lightbox-caption" id="photoLightboxCaption"></div>
+      <button type="button" class="photo-lightbox-btn" id="photoLightboxEdit">Edit</button>
+    </div>
+    <button type="button" class="photo-lightbox-nav prev" id="photoLightboxPrev" aria-label="Previous">‹</button>
+    <img id="photoLightboxImg" class="photo-lightbox-img" alt="">
+    <button type="button" class="photo-lightbox-nav next" id="photoLightboxNext" aria-label="Next">›</button>
+    <div class="photo-lightbox-counter" id="photoLightboxCounter"></div>
   </div>
 
   <div class="toast" id="toast"></div>
